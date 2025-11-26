@@ -1,4 +1,5 @@
 from data_extraction.requester import Requester
+from data_extraction.data_miner import DataMiner, InvalidPatientZeroError
 
 from dotenv import load_dotenv
 import os
@@ -9,6 +10,8 @@ logging.basicConfig(
     level=logging.INFO,  # use DEBUG to see response snippets
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -26,7 +29,9 @@ requester = Requester(base_url=base_url, headers=headers)
 
 # get puuid of summoner
 game_name = "PedroGF45"
-tag_line = "EUW"
-end_point = f"/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
-response = requester.make_request(endpoint_url=end_point)
-print(response)
+tag_line = "EW"
+
+try:
+    data_miner = DataMiner(requester=requester, patient_zero_game_name=game_name, patient_zero_tag_line=tag_line)
+except InvalidPatientZeroError as e:
+    logger.error("Invalid patient zero: %s", e)
