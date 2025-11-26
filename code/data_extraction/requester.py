@@ -1,10 +1,33 @@
+import logging
 import requests
 from typing import Any, Optional, Dict
 from urllib.parse import urljoin
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+logger = logging.getLogger(__name__)
+
 class Requester:
+    """
+    Lightweight HTTP client for Riot API endpoints with retries and timeouts.
+
+    This client normalizes the base URL, safely joins endpoint paths, reuses a
+    configured `requests.Session` with retry/backoff for transient failures and
+    rate limits (429), and parses JSON responses defensively.
+
+    Attributes:
+        base_url: Normalized base URL that always ends with a single '/'.
+        headers: Default HTTP headers applied to every request.
+        default_timeout: Default per-request timeout (seconds).
+        session: A `requests.Session` configured with retry/backoff policy.
+
+    Example:
+        requester = Requester(
+            base_url="https://europe.api.riotgames.com",
+            headers={"X-Riot-Token": "<api-key>"},
+        )
+        data = requester.make_request("/riot/account/v1/accounts/by-riot-id/Name/TAG")
+    """
 
     def __init__(
         self,
@@ -14,6 +37,22 @@ class Requester:
         max_retries: int = 3,
         backoff_factor: float = 0.3,
     ) -> None:
+        """
+        Initialize a session-enabled client with retry/backoff and timeouts.
+
+        Args:
+            base_url: Base URL for the API (e.g., "https://europe.api.riotgames.com").
+            headers: Default headers to include on every request (e.g., X-Riot-Token).
+            timeout: Default per-request timeout in seconds. Defaults to 10.0.
+            max_retries: Max retries for transient/network/status errors. Defaults to 3.
+            backoff_factor: Exponential backoff factor between retries. Defaults to 0.3.
+
+        Notes:
+            - Retries apply to status codes in [429, 500, 502, 503, 504] and respect
+              the `Retry-After` header when present.
+            - The session is mounted for both HTTP and HTTPS with the same policy.
+        """
+
         # Normalize base URL to always end with a single slash for safe joining
         self.base_url = base_url.rstrip("/") + "/"
         self.headers = headers
@@ -44,6 +83,23 @@ class Requester:
         params: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
+        """
+        Execute a GET request to the given endpoint and parse JSON safely.
+
+        Args:
+            endpoint_url: Endpoint path (with or without leading '/').
+            params: Optional query string parameters to include in the request.
+            timeout: Override the default timeout for this call (seconds).
+
+        Returns:
+            The JSON-decoded response (dict, list, etc.) if available; otherwise None.
+
+        Behavior:
+            - On HTTP 200, returns parsed JSON.
+            - On 403, 404, 429 or other non-2xx, logs a concise message and returns
+              the parsed JSON error payload if present; otherwise None.
+            - On network/timeout errors, returns None.
+        """
 
         # Build a correct URL regardless of trailing/leading slashes
         url = urljoin(self.base_url, endpoint_url.lstrip("/"))
@@ -55,27 +111,37 @@ class Requester:
                 timeout=self.default_timeout if timeout is None else timeout,
             )
         except requests.exceptions.RequestException as e:
-            print(f"Network error when calling {url}: {e}")
+            logger.error("Network error when calling %s: %s", url, e)
             return None
 
         # Handle common status codes with project-relevant messages
         if response.status_code == 200:
             return self._safe_json(response)
         elif response.status_code == 403:
-            print("Error 403: Forbidden. API key might be invalid or expired.")
+            logger.warning("Error 403: Forbidden. API key might be invalid or expired.")
         elif response.status_code == 404:
-            print("Error 404: Not Found. The requested resource may not exist in this region.")
+            logger.warning("Error 404: Not Found. The requested resource may not exist in this region.")
         elif response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
-            print(f"Error 429: Rate limited. Retry-After={retry_after or 'unknown'} seconds.")
+            logger.warning("Error 429: Rate limited. Retry-After=%s seconds.", retry_after or "unknown")
         else:
-            print(f"Request failed with status code: {response.status_code}")
-            print(f"Response content (first 500 chars): {response.text[:500]}")
+            logger.error("Request failed with status code: %s", response.status_code)
+            logger.debug("Response content (first 500 chars): %s", response.text[:500])
 
         # Attempt to return any JSON error body for callers to inspect; may be None
         return self._safe_json(response)
 
     def _safe_json(self, response: requests.Response) -> Optional[Any]:
+        """
+        Attempt to decode a response body as JSON, returning None on failure.
+
+        Args:
+            response: A completed `requests.Response` instance.
+
+        Returns:
+            The JSON-decoded object or None if the body is not valid JSON.
+        """
+
         try:
             return response.json()
         except ValueError:

@@ -3,6 +3,13 @@ from data_extraction.requester import Requester
 from dotenv import load_dotenv
 import os
 
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,  # use DEBUG to see response snippets
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 load_dotenv()
 
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
