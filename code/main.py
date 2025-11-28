@@ -29,9 +29,7 @@ requester = Requester(base_url=base_url, headers=headers)
 
 # get puuid of summoner
 game_name = "PedroGF45"
-tag_line = "EW"
+tag_line = "EUW"
 
-try:
-    data_miner = DataMiner(requester=requester, patient_zero_game_name=game_name, patient_zero_tag_line=tag_line)
-except InvalidPatientZeroError as e:
-    logger.error("Invalid patient zero: %s", e)
+data_miner = DataMiner(requester=requester, patient_zero_game_name=game_name, patient_zero_tag_line=tag_line)
+response = data_miner.start_player_search(target_number_of_players=10000)
