@@ -5,8 +5,6 @@ from urllib.parse import urljoin
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-logger = logging.getLogger(__name__)
-
 class Requester:
     """
     Lightweight HTTP client for Riot API endpoints with retries and timeouts.
@@ -31,6 +29,7 @@ class Requester:
 
     def __init__(
         self,
+        logger: logging.Logger,
         base_url: str,
         headers: dict[str, str],
         timeout: float = 10.0,
@@ -52,14 +51,16 @@ class Requester:
               the `Retry-After` header when present.
             - The session is mounted for both HTTP and HTTPS with the same policy.
         """
+    
+        self.logger = logger
 
         # Normalize base URL to always end with a single slash for safe joining
-        self.base_url = base_url.rstrip("/") + "/"
-        self.headers = headers
-        self.default_timeout = timeout
+        self.base_url: str = base_url.rstrip("/") + "/"
+        self.headers: dict[str, str] = headers
+        self.default_timeout: float = timeout
 
         # Reuse a single session with retry/backoff to handle transient errors and 429s
-        self.session = requests.Session()
+        self.session: requests.Session = requests.Session()
         self.session.headers.update(self.headers)
 
         retry = Retry(
@@ -111,22 +112,22 @@ class Requester:
                 timeout=self.default_timeout if timeout is None else timeout,
             )
         except requests.exceptions.RequestException as e:
-            logger.error("Network error when calling %s: %s", url, e)
+            self.logger.error("Network error when calling %s: %s", url, e)
             return None
 
         # Handle common status codes with project-relevant messages
         if response.status_code == 200:
             return self._safe_json(response)
         elif response.status_code == 403:
-            logger.warning("Error 403: Forbidden. API key might be invalid or expired.")
+            self.logger.warning("Error 403: Forbidden. API key might be invalid or expired.")
         elif response.status_code == 404:
-            logger.warning("Error 404: Not Found. The requested resource may not exist in this region.")
+            self.logger.warning("Error 404: Not Found. The requested resource may not exist in this region.")
         elif response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
-            logger.warning("Error 429: Rate limited. Retry-After=%s seconds.", retry_after or "unknown")
+            self.logger.warning("Error 429: Rate limited. Retry-After=%s seconds.", retry_after or "unknown")
         else:
-            logger.error("Request failed with status code: %s", response.status_code)
-            logger.debug("Response content (first 500 chars): %s", response.text[:500])
+            self.logger.error("Request failed with status code: %s", response.status_code)
+            self.logger.debug("Response content (first 500 chars): %s", response.text[:500])
 
         # Attempt to return any JSON error body for callers to inspect; may be None
         return self._safe_json(response)

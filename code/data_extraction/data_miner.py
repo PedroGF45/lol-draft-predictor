@@ -2,6 +2,7 @@ from data_extraction.requester import Requester
 from typing import List
 from collections import deque
 import time
+import logging
 
 class InvalidPatientZeroError(Exception):
     """Raised when the provided patient zero account is invalid or not found."""
@@ -11,7 +12,14 @@ class DataMiner():
     Docstring for DataMiner
     """
 
-    def __init__(self, requester: Requester, patient_zero_game_name: str, patient_zero_tag_line: str) -> None:
+    def __init__(self, 
+        logger: logging.Logger,
+        requester: Requester, 
+        patient_zero_game_name: str, 
+        patient_zero_tag_line: str) -> None:
+    
+        self.logger = logger
+
         self.requester = requester
 
         self.patient_zero_game_name = patient_zero_game_name
@@ -55,16 +63,14 @@ class DataMiner():
 
         while len(self.players_queue) > 0 and len(self.seen_players) < target_number_of_players:
 
-            print("------------")
-            
-            print(f'Number of current players: {len(self.seen_players)}')
+            self.logger.debug(f'Number of current players: {len(self.seen_players)}')
             
             player_to_use = self.players_queue.popleft()
 
             matches_of_player = self.get_last_matches(puuid=player_to_use)
 
             for match in matches_of_player:
-                if len(self.seen_players) >= target_number_of_players:
+                if self._has_reached_players_target(target=target_number_of_players):
                             break
                 
                 if match not in self.seen_matches:
@@ -72,20 +78,19 @@ class DataMiner():
                     new_players = self.get_players_from_match(match_id=match)
 
                     for player in new_players:
-                        if len(self.seen_players) >= target_number_of_players:
+                        if self._has_reached_players_target(target=target_number_of_players):
                             break
 
                         if player not in self.seen_players:
                             self.seen_players.add(player)
                             self.players_queue.append(player)
 
-            print(f'Number of players after requests {len(self.seen_players)}')
+            self.logger.debug(f'Number of players after requests {len(self.seen_players)}')
 
         end = time.time()
-        print("In the end nothing even matters")
-        print(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
-        print(f'Matches length is {len(self.seen_matches)}')
-        print(f'It took {end - start} seconds')
+        self.logger.info(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
+        self.logger.info(f'Matches length is {len(self.seen_matches)}')
+        self.logger.info(f'It took {end - start} seconds')
 
     def get_last_matches(self, puuid: str, number_of_matches: int = 100) -> List[str]:
         """
@@ -104,6 +109,7 @@ class DataMiner():
 
         if response:
             return response
+        self.logger.warning(f'Matches weren\'t fetch for player with puuid of {puuid}')
         return []
 
     def get_players_from_match(self, match_id: str) -> List[str]:
@@ -121,4 +127,8 @@ class DataMiner():
 
         if response and response.get("metadata").get("participants"):
             return response.get("metadata").get("participants")
+        self.logger.warning(f'Players weren\'t fetch for the match with the id of {match_id}')
         return []
+
+    def _has_reached_players_target(self, target: int) -> bool:
+        return len(self.seen_players) >= target
