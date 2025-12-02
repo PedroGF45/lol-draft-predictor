@@ -3,6 +3,8 @@ from typing import List
 from collections import deque
 import time
 import logging
+import pandas as pd
+import os
 
 class InvalidPatientZeroError(Exception):
     """Raised when the provided patient zero account is invalid or not found."""
@@ -87,6 +89,12 @@ class DataMiner():
 
             self.logger.debug(f'Number of players after requests {len(self.seen_players)}')
 
+        players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players)
+        matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches)
+
+        self.save_dataframe_to_parquet(dataframe=players_dataframe, path="F:/Code/lol-draft-predictor/data/players")
+        self.save_dataframe_to_parquet(dataframe=matches_dataframe, path="F:/Code/lol-draft-predictor/data/matches")
+
         end = time.time()
         self.logger.info(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
         self.logger.info(f'Matches length is {len(self.seen_matches)}')
@@ -132,3 +140,40 @@ class DataMiner():
 
     def _has_reached_players_target(self, target: int) -> bool:
         return len(self.seen_players) >= target
+    
+    def convert_to_dataframe(self, set_to_save: set) -> pd.DataFrame:
+
+        if set_to_save is None:
+            self.logger.error("No set provided. Unable to convert dataframe to parquet.")
+            return None
+
+        try:
+            dataframe = pd.DataFrame(list(set_to_save))
+        
+        except Exception as e:
+            self.logger.error(f'Error trying to create a pandas Dataframe: {e}')
+        
+        return dataframe
+    
+    def save_dataframe_to_parquet(self, dataframe: pd.DataFrame, path: str) -> None:
+
+        if not isinstance(dataframe, pd.DataFrame):
+            self.logger.error("No dataframe provided. Unable to save dataframe to parquet.")
+            return None
+        
+        if path is None:
+            self.logger.error("No path provided. Unable to save dataframe to parquet.")
+            return None
+        
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        try:
+            filename = f"data_{int(time.time())}.parquet"
+            parquet_path = os.path.join(path, filename)
+            dataframe.to_parquet(parquet_path)
+            self.logger.info(f'parquet file saved to {parquet_path}')
+
+        except Exception as e:
+            self.logger.error(f'Error saving to parquet: {e}')
+        
