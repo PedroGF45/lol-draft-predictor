@@ -30,6 +30,12 @@ requester = Requester(base_url=base_url, headers=headers, logger=logger)
 # get puuid of summoner
 game_name = "PedroGF45"
 tag_line = "EUW"
-
-data_miner = DataMiner(logger=logger, requester=requester, patient_zero_game_name=game_name, patient_zero_tag_line=tag_line)
-response = data_miner.start_player_search(target_number_of_players=100)
+data_path = "F:\\Code\\lol-draft-predictor\\data"
+checkpoint_file_path = "F:\\Code\\lol-draft-predictor\\data\\pickle\\checkpoint.pkl"
+data_miner = DataMiner(logger=logger, 
+                       requester=requester, 
+                       raw_data_path=data_path, 
+                       patient_zero_game_name=game_name, 
+                       patient_zero_tag_line=tag_line,
+                       checkpoint_loading_path=checkpoint_file_path)
+response = data_miner.start_player_search(target_number_of_players=5000)

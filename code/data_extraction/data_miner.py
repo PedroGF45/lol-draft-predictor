@@ -1,4 +1,5 @@
 from data_extraction.requester import Requester
+from persistence.checkpoint import save_checkpoint, load_checkpoint
 from typing import List
 from collections import deque
 import time
@@ -16,20 +17,30 @@ class DataMiner():
 
     def __init__(self, 
         logger: logging.Logger,
-        requester: Requester, 
+        requester: Requester,
+        raw_data_path: str, 
         patient_zero_game_name: str, 
-        patient_zero_tag_line: str) -> None:
+        patient_zero_tag_line: str,
+        checkpoint_loading_path: str = None) -> None:
     
         self.logger = logger
-
         self.requester = requester
+
+        self.raw_data_path = raw_data_path
 
         self.patient_zero_game_name = patient_zero_game_name
         self.patient_zero_tag_line = patient_zero_tag_line
 
-        self.players_queue = deque()
-        self.seen_players = set()
-        self.seen_matches = set()
+        if checkpoint_loading_path is None:
+            self.players_queue = deque()
+            self.seen_players = set()
+            self.seen_matches = set()
+        else:
+            checkpoint_state = load_checkpoint(logger=self.logger, path=checkpoint_loading_path)
+            self.players_queue = checkpoint_state.get('players_queue')
+            self.seen_players = checkpoint_state.get('seen_players')
+            self.seen_matches = checkpoint_state.get('seen_matches')
+            self.logger.info(f'Loaded:{len(self.players_queue)} for the players queue \n{len(self.seen_players)} for the players set \n{len(self.seen_matches)} for the matches set \n')
 
         if not self._is_patient_zero_valid():
             raise InvalidPatientZeroError(
@@ -87,13 +98,23 @@ class DataMiner():
                             self.seen_players.add(player)
                             self.players_queue.append(player)
 
-            self.logger.debug(f'Number of players after requests {len(self.seen_players)}')
+            self.logger.info(f'Number of players after requests {len(self.seen_players)}')
+
+            checkpoint_dict = {}
+            checkpoint_dict["players_queue"] = self.players_queue
+            checkpoint_dict["seen_players"] = self.seen_players
+            checkpoint_dict["seen_matches"] = self.seen_matches
+            test_path = os.path.join(self.raw_data_path, "pickle\\checkpoint.pkl")
+            save_checkpoint(logger=self.logger, state=checkpoint_dict, path=test_path)
 
         players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players)
         matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches)
 
-        self.save_dataframe_to_parquet(dataframe=players_dataframe, path="F:/Code/lol-draft-predictor/data/players")
-        self.save_dataframe_to_parquet(dataframe=matches_dataframe, path="F:/Code/lol-draft-predictor/data/matches")
+
+        player_data_path = os.path.join(self.raw_data_path, "players_puuid")
+        match_data_path = os.path.join(self.raw_data_path, "matches_id")
+        self.save_dataframe_to_parquet(dataframe=players_dataframe, path=player_data_path)
+        self.save_dataframe_to_parquet(dataframe=matches_dataframe, path=match_data_path)
 
         end = time.time()
         self.logger.info(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
