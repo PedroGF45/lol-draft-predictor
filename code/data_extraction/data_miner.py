@@ -64,7 +64,10 @@ class DataMiner():
             return True
         return False
 
-    def start_player_search(self, target_number_of_players: int = 100) -> None:
+    def start_search(self, 
+                            search_mode: str = 'players',
+                            target_number_of_players: int = 100,
+                            target_number_of_matches: int = 100) -> None:
         """
         Docstring for start_player_search
         
@@ -72,33 +75,50 @@ class DataMiner():
         :param target_number_of_players: Description
         :type target_number_of_players: int
         """
+
+        if search_mode not in ['players', 'matches', 'both']:
+            self.logger.warning(f'Search mode should be "players", "matches" or "both" but got {search_mode}. Sticking to default "players" search.')
+            search_mode = "players"
+
+        number_of_matches = 0
+        if search_mode == "matches":
+            number_of_matches = 100
+        elif search_mode == "both":
+            number_of_matches = 50
+        else:
+            number_of_matches = 20
+
+
         start = time.time()
 
-        while len(self.players_queue) > 0 and len(self.seen_players) < target_number_of_players:
+        while len(self.players_queue) > 0 and not self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
 
-            self.logger.debug(f'Number of current players: {len(self.seen_players)}')
+            self.logger.info(f'Number of current players: {len(self.seen_players)}\n Number of current matches: {len(self.seen_matches)}')
             
             player_to_use = self.players_queue.popleft()
-
-            matches_of_player = self.get_last_matches(puuid=player_to_use)
+            matches_of_player = self.get_last_matches(puuid=player_to_use, number_of_matches=number_of_matches)
 
             for match in matches_of_player:
-                if self._has_reached_players_target(target=target_number_of_players):
+                if self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
                             break
                 
                 if match not in self.seen_matches:
                     self.seen_matches.add(match)
-                    new_players = self.get_players_from_match(match_id=match)
+
+                    if search_mode == "matches" and len(self.players_queue) >= (len(self.seen_matches) * 10):
+                        continue
+
+                    new_players = self.get_players_from_match(match_id=match) 
 
                     for player in new_players:
-                        if self._has_reached_players_target(target=target_number_of_players):
+                        if self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
                             break
 
                         if player not in self.seen_players:
                             self.seen_players.add(player)
                             self.players_queue.append(player)
 
-            self.logger.info(f'Number of players after requests {len(self.seen_players)}')
+            self.logger.info(f'Number of players after requests: {len(self.seen_players)}\n Number of matches after requests: {len(self.seen_matches)}')
 
             checkpoint_dict = {}
             checkpoint_dict["players_queue"] = self.players_queue
@@ -159,8 +179,16 @@ class DataMiner():
         self.logger.warning(f'Players weren\'t fetch for the match with the id of {match_id}')
         return []
 
-    def _has_reached_players_target(self, target: int) -> bool:
-        return len(self.seen_players) >= target
+    def _has_reached_target(self, mode: str, target_players: int, target_matches: int) -> bool:
+        """Check if search target is reached based on mode."""
+        if mode == "players":
+            return len(self.seen_players) >= target_players
+        elif mode == "matches":
+            return len(self.seen_matches) >= target_matches
+        elif mode == "both":
+            return len(self.seen_players) >= target_players and len(self.seen_matches) >= target_matches
+        else:
+            raise ValueError(f"Unknown search_mode: {mode}")
     
     def convert_to_dataframe(self, set_to_save: set) -> pd.DataFrame:
 

@@ -36,6 +36,7 @@ data_miner = DataMiner(logger=logger,
                        requester=requester, 
                        raw_data_path=data_path, 
                        patient_zero_game_name=game_name, 
-                       patient_zero_tag_line=tag_line,
-                       checkpoint_loading_path=checkpoint_file_path)
-response = data_miner.start_player_search(target_number_of_players=5000)
+                       patient_zero_tag_line=tag_line)
+response = data_miner.start_search(search_mode="matches", 
+                                          target_number_of_players=1000,
+                                          target_number_of_matches=1000)
