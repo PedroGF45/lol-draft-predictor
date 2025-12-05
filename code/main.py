@@ -1,5 +1,6 @@
 from data_extraction.requester import Requester
 from data_extraction.data_miner import DataMiner, InvalidPatientZeroError
+from data_extraction.match_fetcher import MatchFetcher
 
 from dotenv import load_dotenv
 import os
@@ -32,11 +33,15 @@ game_name = "PedroGF45"
 tag_line = "EUW"
 data_path = "F:\\Code\\lol-draft-predictor\\data"
 checkpoint_file_path = "F:\\Code\\lol-draft-predictor\\data\\pickle\\checkpoint.pkl"
-data_miner = DataMiner(logger=logger, 
+""" data_miner = DataMiner(logger=logger, 
                        requester=requester, 
                        raw_data_path=data_path, 
                        patient_zero_game_name=game_name, 
                        patient_zero_tag_line=tag_line)
 response = data_miner.start_search(search_mode="matches", 
                                           target_number_of_players=1000,
-                                          target_number_of_matches=1000)
+                                          target_number_of_matches=10) """
+
+parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\matches_id\\data_1764951216.parquet"
+match_fetcher = MatchFetcher(requester=requester, logger=logger, dataframe_target_path=data_path)
+match_fetcher.fetch_match_data(parquet_path=parquet_file_path)
