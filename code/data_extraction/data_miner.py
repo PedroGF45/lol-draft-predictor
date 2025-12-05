@@ -1,10 +1,13 @@
 from data_extraction.requester import Requester
 from persistence.checkpoint import save_checkpoint, load_checkpoint
+from data_extraction.schemas import PLAYERS_SCHEMA, MATCHES_SCHEMA
 from typing import List
 from collections import deque
 import time
 import logging
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import os
 
 class InvalidPatientZeroError(Exception):
@@ -105,7 +108,7 @@ class DataMiner():
                 if match not in self.seen_matches:
                     self.seen_matches.add(match)
 
-                    if search_mode == "matches" and len(self.players_queue) >= (len(self.seen_matches) * 10):
+                    if search_mode == "matches" and len(self.players_queue) >= (len(self.seen_matches) * 8):
                         continue
 
                     new_players = self.get_players_from_match(match_id=match) 
@@ -127,14 +130,14 @@ class DataMiner():
             test_path = os.path.join(self.raw_data_path, "pickle\\checkpoint.pkl")
             save_checkpoint(logger=self.logger, state=checkpoint_dict, path=test_path)
 
-        players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players)
-        matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches)
+        players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players, mode=search_mode)
+        matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches, mode=search_mode)
 
 
         player_data_path = os.path.join(self.raw_data_path, "players_puuid")
         match_data_path = os.path.join(self.raw_data_path, "matches_id")
-        self.save_dataframe_to_parquet(dataframe=players_dataframe, path=player_data_path)
-        self.save_dataframe_to_parquet(dataframe=matches_dataframe, path=match_data_path)
+        self.save_dataframe_to_parquet(dataframe=players_dataframe, path=player_data_path, mode=search_mode)
+        self.save_dataframe_to_parquet(dataframe=matches_dataframe, path=match_data_path, mode=search_mode)
 
         end = time.time()
         self.logger.info(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
@@ -185,26 +188,26 @@ class DataMiner():
             return len(self.seen_players) >= target_players
         elif mode == "matches":
             return len(self.seen_matches) >= target_matches
-        elif mode == "both":
-            return len(self.seen_players) >= target_players and len(self.seen_matches) >= target_matches
         else:
             raise ValueError(f"Unknown search_mode: {mode}")
     
-    def convert_to_dataframe(self, set_to_save: set) -> pd.DataFrame:
+    def convert_to_dataframe(self, set_to_save: set, mode: str) -> pd.DataFrame:
 
         if set_to_save is None:
             self.logger.error("No set provided. Unable to convert dataframe to parquet.")
             return None
 
         try:
-            dataframe = pd.DataFrame(list(set_to_save))
+            columns = "puuid" if mode == "players" else "match_id"
+            dataframe = pd.DataFrame(list(set_to_save), columns=[columns])
         
         except Exception as e:
             self.logger.error(f'Error trying to create a pandas Dataframe: {e}')
+            return None
         
         return dataframe
     
-    def save_dataframe_to_parquet(self, dataframe: pd.DataFrame, path: str) -> None:
+    def save_dataframe_to_parquet(self, dataframe: pd.DataFrame, path: str, mode: str) -> None:
 
         if not isinstance(dataframe, pd.DataFrame):
             self.logger.error("No dataframe provided. Unable to save dataframe to parquet.")
@@ -220,7 +223,13 @@ class DataMiner():
         try:
             filename = f"data_{int(time.time())}.parquet"
             parquet_path = os.path.join(path, filename)
-            dataframe.to_parquet(parquet_path)
+            if mode == "players":
+                table = pa.Table.from_pandas(df=dataframe, schema=PLAYERS_SCHEMA)
+                pq.write_table(table, parquet_path)
+            else:
+                table = pa.Table.from_pandas(df=dataframe, schema=MATCHES_SCHEMA)
+                pq.write_table(table, parquet_path)
+            
             self.logger.info(f'parquet file saved to {parquet_path}')
 
         except Exception as e:
