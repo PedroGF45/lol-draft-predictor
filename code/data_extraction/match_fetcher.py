@@ -5,6 +5,7 @@ import os
 import logging
 import pandas as pd
 from typing import Any
+from tqdm import tqdm
 
 class MatchFetcher():
 
@@ -40,7 +41,11 @@ class MatchFetcher():
         final_match_df = []
         final_player_history_df = []
 
-        for match_id in match_df.itertuples(index=False):
+        # Add progress bar for match processing
+        total_matches = len(match_df)
+        self.logger.info(f'Processing {total_matches} matches...')
+        
+        for match_id in tqdm(match_df.itertuples(index=False), total=total_matches, desc="Processing matches", unit="match"):
             match_id = match_id.match_id
             # fetch match details
             match_pre_features = self.fetch_match_pre_features(match_id=match_id)
@@ -59,25 +64,25 @@ class MatchFetcher():
 
             # Fetch summoner level for each participant
             summoner_levels = self.fetch_summoner_level_data(participants=participants)
-            self.logger.info(f'Summoner Levels: {summoner_levels}')
+            self.logger.debug(f'Summoner Levels: {summoner_levels}')
 
             # fetch champion mastery of the champion played in the match for each participant
             champion_picks = match_pre_features.get("team1_picks") + match_pre_features.get("team2_picks")
             champion_masteries = self.fetch_champion_mastery_data(participants=participants, champion_picks=champion_picks)
-            self.logger.info(f'Champion Masteries: {champion_masteries}')
+            self.logger.debug(f'Champion Masteries: {champion_masteries}')
 
             # fetch the total mastery score for each participant
             champion_total_mastery_scores = self.fetch_total_mastery_score(participants=participants)
-            self.logger.info(f'Total Mastery Scores: {champion_total_mastery_scores}')
+            self.logger.debug(f'Total Mastery Scores: {champion_total_mastery_scores}')
 
             # fetch rank queue data for each participant
             rank_queue_data = self.fetch_rank_queue_data(participants=participants)
-            self.logger.info(f'Rank Queue Data: {rank_queue_data}')
+            self.logger.debug(f'Rank Queue Data: {rank_queue_data}')
 
             # get raw kpis for each participant on last 100 matches before this match
             current_match_timestamp_creation = match_pre_features.get("game_creation")
             kpis_data = self.fetch_raw_player_kpis(participants=participants, match_limit=match_limit, before_timestamp=current_match_timestamp_creation)
-            self.logger.info(f'KPIs Data: {kpis_data}')
+            self.logger.debug(f'KPIs Data: {kpis_data}')
 
             # create match record with match schema
             match_record = self.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
@@ -158,24 +163,24 @@ class MatchFetcher():
             team2_roles.append(participant.get("individualPosition") if participant.get("individualPosition") in role_order else "UNKNOWN")
         match_outcome = match_details.get("info").get("teams")[0].get("win")  # True if team 1 won, False otherwise
 
-        self.logger.info(f'Match ID: {match_id}')
-        self.logger.info(f'Data Version: {data_version}')
-        self.logger.info(f'Game Creation Timestamp: {game_creation}')
-        self.logger.info(f'Game Duration: {game_duration} seconds')
-        self.logger.info(f'Game Mode: {game_mode}')
-        self.logger.info(f'Game Type: {game_type}')
-        self.logger.info(f'Queue ID: {queue_id}')
-        self.logger.info(f'Game Version: {game_version}')
-        self.logger.info(f'Platform ID: {platform_id}')
-        self.logger.info(f'Team 1 Bans: {team1_bans}')
-        self.logger.info(f'Team 2 Bans: {team2_bans}')
-        self.logger.info(f'Team 1 Picks: {team1_picks}')
-        self.logger.info(f'Team 2 Picks: {team2_picks}')
-        self.logger.info(f'Team 1 Roles: {team1_roles}')
-        self.logger.info(f'Team 2 Roles: {team2_roles}')
-        self.logger.info(f'Team 1 Participants: {team1_participants}')
-        self.logger.info(f'Team 2 Participants: {team2_participants}')
-        self.logger.info(f'Match Outcome (Team 1 Win): {match_outcome}')
+        self.logger.debug(f'Match ID: {match_id}')
+        self.logger.debug(f'Data Version: {data_version}')
+        self.logger.debug(f'Game Creation Timestamp: {game_creation}')
+        self.logger.debug(f'Game Duration: {game_duration} seconds')
+        self.logger.debug(f'Game Mode: {game_mode}')
+        self.logger.debug(f'Game Type: {game_type}')
+        self.logger.debug(f'Queue ID: {queue_id}')
+        self.logger.debug(f'Game Version: {game_version}')
+        self.logger.debug(f'Platform ID: {platform_id}')
+        self.logger.debug(f'Team 1 Bans: {team1_bans}')
+        self.logger.debug(f'Team 2 Bans: {team2_bans}')
+        self.logger.debug(f'Team 1 Picks: {team1_picks}')
+        self.logger.debug(f'Team 2 Picks: {team2_picks}')
+        self.logger.debug(f'Team 1 Roles: {team1_roles}')
+        self.logger.debug(f'Team 2 Roles: {team2_roles}')
+        self.logger.debug(f'Team 1 Participants: {team1_participants}')
+        self.logger.debug(f'Team 2 Participants: {team2_participants}')
+        self.logger.debug(f'Match Outcome (Team 1 Win): {match_outcome}')
 
         match_pre_features = {
             "data_version": data_version,
@@ -207,7 +212,7 @@ class MatchFetcher():
             summoner_data = self.requester.make_request(is_v5=False, endpoint_url=summoner_endpoint)
 
             summoner_level = summoner_data.get("summonerLevel")
-            self.logger.info(f'Summoner PUUID: {puuid}, Level: {summoner_level}')
+            self.logger.debug(f'Summoner PUUID: {puuid}, Level: {summoner_level}')
             summoner_levels[puuid] = summoner_level
 
         return summoner_levels
@@ -292,7 +297,7 @@ class MatchFetcher():
                     # Extract game duration from match info
                     game_duration_seconds = match_details.get("info").get("gameDuration", 0)
                     
-                    print(f'Participant Data for PUUID {puuid} in Match {kpis_match_id}')
+                    self.logger.debug(f'Participant Data for PUUID {puuid} in Match {kpis_match_id}')
                     
                     # get relevant kpis
                     kpis = {
