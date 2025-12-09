@@ -20,13 +20,15 @@ RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 
 print("RIOT_API_KEY: ", RIOT_API_KEY)
 
-region = "europe"
-base_url = f'https://{region}.api.riotgames.com'
+region_v4 = "euw1"
+region_v5 = "europe"
+base_url_v4 = f'https://{region_v4}.api.riotgames.com'
+base_url_v5 = f'https://{region_v5}.api.riotgames.com'
 headers = {
     "X-Riot-Token": RIOT_API_KEY
 }
 
-requester = Requester(base_url=base_url, headers=headers, logger=logger)
+requester = Requester(base_url_v4=base_url_v4, base_url_v5=base_url_v5, headers=headers, logger=logger)
 
 # get puuid of summoner
 game_name = "PedroGF45"
@@ -44,4 +46,4 @@ response = data_miner.start_search(search_mode="matches",
 
 parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\matches_id\\data_1764951216.parquet"
 match_fetcher = MatchFetcher(requester=requester, logger=logger, dataframe_target_path=data_path)
-match_fetcher.fetch_match_data(parquet_path=parquet_file_path)
+match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit=1)

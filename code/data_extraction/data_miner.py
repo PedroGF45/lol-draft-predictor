@@ -59,7 +59,7 @@ class DataMiner():
         :rtype: bool
         """
         endpoint_url = f"/riot/account/v1/accounts/by-riot-id/{self.patient_zero_game_name}/{self.patient_zero_tag_line}"
-        response = self.requester.make_request(endpoint_url=endpoint_url)
+        response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
 
         if response and response.get("puuid"):
             self.players_queue.append(response["puuid"])
@@ -157,7 +157,7 @@ class DataMiner():
         :rtype: Any
         """
         endpoint_url = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={number_of_matches}'
-        response = self.requester.make_request(endpoint_url=endpoint_url)
+        response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
 
         if response:
             return response
@@ -175,7 +175,7 @@ class DataMiner():
         :rtype: Any
         """
         endpoint_url = f'/lol/match/v5/matches/{match_id}'
-        response = self.requester.make_request(endpoint_url=endpoint_url)
+        response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
 
         if response and response.get("metadata").get("participants"):
             return response.get("metadata").get("participants")

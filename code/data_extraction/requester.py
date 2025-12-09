@@ -30,7 +30,8 @@ class Requester:
     def __init__(
         self,
         logger: logging.Logger,
-        base_url: str,
+        base_url_v4: str,
+        base_url_v5: str,
         headers: dict[str, str],
         timeout: float = 10.0,
         max_retries: int = 3,
@@ -55,7 +56,8 @@ class Requester:
         self.logger = logger
 
         # Normalize base URL to always end with a single slash for safe joining
-        self.base_url: str = base_url.rstrip("/") + "/"
+        self.base_url_v4: str = base_url_v4.rstrip("/") + "/"
+        self.base_url_v5: str = base_url_v5.rstrip("/") + "/"
         self.headers: dict[str, str] = headers
         self.default_timeout: float = timeout
 
@@ -80,6 +82,7 @@ class Requester:
 
     def make_request(
         self,
+        is_v5: bool,
         endpoint_url: str,
         params: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
@@ -102,8 +105,10 @@ class Requester:
             - On network/timeout errors, returns None.
         """
 
+        base_url = self.base_url_v5 if is_v5 else self.base_url_v4
+
         # Build a correct URL regardless of trailing/leading slashes
-        url = urljoin(self.base_url, endpoint_url.lstrip("/"))
+        url = urljoin(base_url, endpoint_url.lstrip("/"))
 
         try:
             response = self.session.get(
