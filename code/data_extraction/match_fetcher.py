@@ -29,7 +29,7 @@ class MatchFetcher():
 
         return match_df
 
-    def fetch_match_data(self, parquet_path: str, match_limit: int = 50) -> None:
+    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit: int = 50) -> None:
 
         if not os.path.exists(parquet_path):
             self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
@@ -38,10 +38,21 @@ class MatchFetcher():
 
         final_df = []
 
-        for _index, match_id in match_df.itertuples():
+        for _index, match_id in match_df.itertuples(index=False):
             
             # fetch match details
             match_pre_features = self.fetch_match_pre_features(match_id=match_id)
+
+            # check if game is a remake
+            if not keep_remakes and match_pre_features.get("game_duration") < 300:
+                self.logger.info(f'Skipping remake match: {match_id}')
+                continue
+
+            # filter by queue
+            if match_pre_features.get("queue_id") not in queue:
+                self.logger.info(f'Skipping match {match_id} due to queue filter. Queue ID: {match_pre_features.get("queue_id")}')
+                continue
+
             participants = match_pre_features.get("team1_participants") + match_pre_features.get("team2_participants")
 
             # Fetch summoner level for each participant
@@ -56,7 +67,6 @@ class MatchFetcher():
             # fetch the total mastery score for each participant
             champion_total_mastery_scores = self.fetch_total_mastery_score(participants=participants)
             self.logger.info(f'Total Mastery Scores: {champion_total_mastery_scores}')
-
 
             # fetch rank queue data for each participant
             rank_queue_data = self.fetch_rank_queue_data(participants=participants)
