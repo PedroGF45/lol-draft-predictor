@@ -50,6 +50,10 @@ class MatchFetcher():
             # fetch match details
             match_pre_features = self.fetch_match_pre_features(match_id=match_id)
 
+            if match_pre_features is None:
+                self.logger.info(f'Skipping match {match_id} due to incomplete data')
+                continue
+
             # check if game is a remake
             if not keep_remakes and match_pre_features.get("game_duration") < 300:
                 self.logger.info(f'Skipping remake match: {match_id}')
@@ -140,9 +144,15 @@ class MatchFetcher():
         game_version = match_details.get("info").get("gameVersion") #11.18.387.1024
         platform_id = match_details.get("info").get("platformId") #EUW1
 
+        # Validate that both teams exist
+        teams = match_details.get("info", {}).get("teams", [])
+        if len(teams) < 2:
+            self.logger.info(f'Skipping match {match_id} due to incomplete team data (only {len(teams)} team(s) found)')
+            return None
+
         # list of bans by championId for each team
-        team1_bans = [ban.get('championId') for ban in match_details.get("info").get("teams")[0].get("bans")]
-        team2_bans = [ban.get('championId') for ban in match_details.get("info").get("teams")[1].get("bans")]
+        team1_bans = [ban.get('championId') for ban in teams[0].get("bans")]
+        team2_bans = [ban.get('championId') for ban in teams[1].get("bans")]
 
         team1_picks = []
         team2_picks = []
@@ -161,7 +171,7 @@ class MatchFetcher():
         for participant in team2_participants_data:
             team2_picks.append(participant.get("championId"))
             team2_roles.append(participant.get("individualPosition") if participant.get("individualPosition") in role_order else "UNKNOWN")
-        match_outcome = match_details.get("info").get("teams")[0].get("win")  # True if team 1 won, False otherwise
+        match_outcome = teams[0].get("win")  # True if team 1 won, False otherwise
 
         self.logger.debug(f'Match ID: {match_id}')
         self.logger.debug(f'Data Version: {data_version}')
