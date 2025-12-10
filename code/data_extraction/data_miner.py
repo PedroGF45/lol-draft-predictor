@@ -79,7 +79,7 @@ class DataMiner():
         :type target_number_of_players: int
         """
 
-        if search_mode not in ['players', 'matches', 'both']:
+        if search_mode not in ['players', 'matches']:
             self.logger.warning(f'Search mode should be "players", "matches" or "both" but got {search_mode}. Sticking to default "players" search.')
             search_mode = "players"
 
