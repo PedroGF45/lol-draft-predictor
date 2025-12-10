@@ -171,6 +171,7 @@ class MatchFetcher():
     def _save_checkpoint(self) -> None:
         """Save current progress (processed matches and dataframes) to checkpoint file."""
         if not self.checkpoint_loading_path:
+            self.logger.warning('Checkpoint loading path not set; skipping checkpoint save.')
             return
         
         checkpoint_state = {
