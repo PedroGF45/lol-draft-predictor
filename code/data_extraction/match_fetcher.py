@@ -1,5 +1,6 @@
 from data_extraction.requester import Requester
 from data_extraction.schemas import MATCH_SCHEMA, PLAYER_HISTORY_SCHEMA
+from persistence.checkpoint import save_checkpoint, load_checkpoint
 
 import os
 import logging
@@ -9,7 +10,7 @@ from tqdm import tqdm
 
 class MatchFetcher():
 
-    def __init__(self, requester: Requester, logger: logging.Logger,  dataframe_target_path: str) -> None:
+    def __init__(self, requester: Requester, logger: logging.Logger,  dataframe_target_path: str, checkpoint_loading_path: str = None) -> None:
         
         self.requester = requester
         self.logger = logger
@@ -18,6 +19,20 @@ class MatchFetcher():
         if not os.path.exists(dataframe_target_path):
             logger.warning(f'Dataframe target path is not valid. Defaulting to "data/players"')
             self.dataframe_target_path = "./data/players"
+        
+        # Initialize checkpoint state
+        self.checkpoint_loading_path = checkpoint_loading_path
+        self.processed_matches = set()
+        self.final_match_df_list = []
+        self.final_player_history_df_list = []
+        
+        if checkpoint_loading_path and os.path.exists(checkpoint_loading_path):
+            checkpoint_state = load_checkpoint(logger=self.logger, path=checkpoint_loading_path)
+            if checkpoint_state:
+                self.processed_matches = checkpoint_state.get("processed_matches", set())
+                self.final_match_df_list = checkpoint_state.get("final_match_df_list", [])
+                self.final_player_history_df_list = checkpoint_state.get("final_player_history_df_list", [])
+                self.logger.info(f"Resumed from checkpoint: {len(self.processed_matches)} matches already processed")
       
     def get_dataframe_from_parquet(self, parquet_path: str) -> pd.DataFrame:
 
@@ -31,37 +46,44 @@ class MatchFetcher():
 
         return match_df
 
-    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit: int = 50) -> None:
+    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit: int = 50, checkpoint_save_interval: int = 10) -> None:
 
         if not os.path.exists(parquet_path):
             self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
         
         match_df = self.get_dataframe_from_parquet(parquet_path=parquet_path)
 
-        final_match_df = []
-        final_player_history_df = []
-
         # Add progress bar for match processing
         total_matches = len(match_df)
         self.logger.info(f'Processing {total_matches} matches...')
         
+        checkpoint_counter = 0
         for match_id in tqdm(match_df.itertuples(index=False), total=total_matches, desc="Processing matches", unit="match"):
             match_id = match_id.match_id
+            
+            # Skip already-processed matches
+            if match_id in self.processed_matches:
+                self.logger.debug(f'Skipping already-processed match: {match_id}')
+                continue
+            
             # fetch match details
             match_pre_features = self.fetch_match_pre_features(match_id=match_id)
 
             if match_pre_features is None:
                 self.logger.info(f'Skipping match {match_id} due to incomplete data')
+                self.processed_matches.add(match_id)
                 continue
 
             # check if game is a remake
             if not keep_remakes and match_pre_features.get("game_duration") < 300:
                 self.logger.info(f'Skipping remake match: {match_id}')
+                self.processed_matches.add(match_id)
                 continue
 
             # filter by queue
             if match_pre_features.get("queue_id") not in queue:
                 self.logger.info(f'Skipping match {match_id} due to queue filter. Queue ID: {match_pre_features.get("queue_id")}')
+                self.processed_matches.add(match_id)
                 continue
 
             participants = match_pre_features.get("team1_participants") + match_pre_features.get("team2_participants")
@@ -90,7 +112,7 @@ class MatchFetcher():
 
             # create match record with match schema
             match_record = self.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
-            final_match_df.append(match_record)
+            self.final_match_df_list.append(match_record)
 
             # create player history records
             for puuid in participants:
@@ -109,10 +131,18 @@ class MatchFetcher():
                     rank_queue_data=rank_queue_data,
                     kpis_data=kpis_data.get(puuid)
                 )
-                final_player_history_df.append(player_history_record)
+                self.final_player_history_df_list.append(player_history_record)
             
-        final_match_df = pd.DataFrame(final_match_df)
-        final_player_history_df = pd.DataFrame(final_player_history_df)
+            # Mark match as processed
+            self.processed_matches.add(match_id)
+            
+            # Periodically save checkpoint
+            checkpoint_counter += 1
+            if checkpoint_counter % checkpoint_save_interval == 0 and self.checkpoint_loading_path:
+                self._save_checkpoint()
+
+        final_match_df = pd.DataFrame(self.final_match_df_list)
+        final_player_history_df = pd.DataFrame(self.final_player_history_df_list)
 
         self.logger.info(f'Final Dataframe Info: {final_match_df.info()}')
         self.logger.info(f'Final Dataframe Head: {final_match_df.head()}')
@@ -129,6 +159,26 @@ class MatchFetcher():
         player_history_output_path = os.path.join(self.dataframe_target_path, 'player_history.parquet')
         final_player_history_df.to_parquet(player_history_output_path, index=False)
         self.logger.info(f'Player History Dataframe saved to {player_history_output_path}')
+        
+        # Clear checkpoint after successful completion
+        if self.checkpoint_loading_path and os.path.exists(self.checkpoint_loading_path):
+            try:
+                os.remove(self.checkpoint_loading_path)
+                self.logger.info(f'Checkpoint cleared after successful completion')
+            except Exception as e:
+                self.logger.warning(f'Failed to clear checkpoint: {e}')
+
+    def _save_checkpoint(self) -> None:
+        """Save current progress (processed matches and dataframes) to checkpoint file."""
+        if not self.checkpoint_loading_path:
+            return
+        
+        checkpoint_state = {
+            "processed_matches": self.processed_matches,
+            "final_match_df_list": self.final_match_df_list,
+            "final_player_history_df_list": self.final_player_history_df_list
+        }
+        save_checkpoint(logger=self.logger, state=checkpoint_state, path=self.checkpoint_loading_path)
 
     def fetch_match_pre_features(self, match_id: str) -> dict[str, Any]:
     
@@ -264,6 +314,11 @@ class MatchFetcher():
             summoner_endpoint = f'/lol/league/v4/entries/by-puuid/{puuid}'
             rank_data = self.requester.make_request(is_v5=False, endpoint_url=summoner_endpoint)
 
+            # Guard against None or non-list responses (e.g., API errors)
+            if not isinstance(rank_data, list):
+                self.logger.debug(f'Rank data for {puuid} is not a list: {type(rank_data).__name__}')
+                continue
+
             # Find the rank data for the RANKED_SOLO_5x5 queue
             solo_queue_data = next((entry for entry in rank_data if entry.get("queueType") == "RANKED_SOLO_5x5"), None)
             if solo_queue_data:
@@ -297,12 +352,22 @@ class MatchFetcher():
                 kpis_endpoint += f'&endTime={before_timestamp}'
             kpis_match_ids = self.requester.make_request(is_v5=True, endpoint_url=kpis_endpoint)
 
+            # Guard against None or non-list responses (e.g., API errors)
+            if not isinstance(kpis_match_ids, list):
+                self.logger.debug(f'KPI match IDs for {puuid} is not a list: {type(kpis_match_ids).__name__}')
+                continue
+
             kpis_list = []
             for kpis_match_id in kpis_match_ids:
                 match_details_endpoint = f'/lol/match/v5/matches/{kpis_match_id}'
                 match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
 
-                participant_data = next((p for p in match_details.get("info").get("participants") if p.get("puuid") == puuid), None)
+                # Guard against None or invalid match details
+                if not isinstance(match_details, dict) or not match_details.get("info"):
+                    self.logger.debug(f'Invalid match details for {kpis_match_id}')
+                    continue
+
+                participant_data = next((p for p in match_details.get("info").get("participants", []) if p.get("puuid") == puuid), None)
                 if participant_data:
                     # Extract game duration from match info
                     game_duration_seconds = match_details.get("info").get("gameDuration", 0)

@@ -48,5 +48,6 @@ response = data_miner.start_search(search_mode="matches",
 
 # Phase 2: Fetch and enrich matches
 parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\matches_id\\data_1765320125.parquet"
-match_fetcher = MatchFetcher(requester=requester, logger=logger, dataframe_target_path=data_path)
-match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit=20)
+checkpoint_path = os.path.join(data_path, "pickle", "match_fetcher_checkpoint.pkl")
+match_fetcher = MatchFetcher(requester=requester, logger=logger, dataframe_target_path=data_path, checkpoint_loading_path=checkpoint_path)
+match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit=1)
