@@ -198,11 +198,13 @@ class MatchFetcher:
         self.logger.info(f'Final Player History Dataframe Head: {final_player_history_df.head()}')
         self.logger.info(f'Final Player History Dataframde description: {final_player_history_df.describe()}')
         
-        # save final dataframe to parquet
-        match_output_path = os.path.join(self.dataframe_target_path, 'matches.parquet')
+        # sufix with current date, number of matches saved, number of matches_per_player
+        current_date = pd.Timestamp.now().strftime('%Y%m%d')
+        match_path_sufix = f'{current_date}_matches_{len(final_match_df)}_players_per_match_{match_limit_per_player}'
+        match_output_path = os.path.join(self.dataframe_target_path, f'matches_{match_path_sufix}.parquet')
         final_match_df.to_parquet(match_output_path, index=False)
         self.logger.info(f'Match Dataframe saved to {match_output_path}')
-        player_history_output_path = os.path.join(self.dataframe_target_path, 'player_history.parquet')
+        player_history_output_path = os.path.join(self.dataframe_target_path, f'player_history_{match_path_sufix}.parquet')
         final_player_history_df.to_parquet(player_history_output_path, index=False)
         self.logger.info(f'Player History Dataframe saved to {player_history_output_path}')
         
