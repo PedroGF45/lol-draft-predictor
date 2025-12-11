@@ -236,7 +236,7 @@ class DataCleaner:
             'all_in_pings', 'assist_me_pings', 'command_pings', 'enemy_missing_pings',
             'enemy_vision_pings', 'hold_pings', 'get_back_pings','need_vision_pings',
             'on_my_way_pings', 'push_pings', 'vision_cleared_pings', 'average_wards_placed',
-            'average_wards_kills', 'average_sight_wards_bought', 'average_detector_wards_placed',
+            'average_ward_kills', 'average_sight_wards_bought', 'average_detector_wards_placed',
             'average_killing_sprees', 'average_largest_killing_spree', 'average_largest_multi_kill',
             'average_double_kills', 'average_triple_kills', 'average_quadra_kills', 'average_penta_kills',
             'average_baron_kills', 'average_dragon_kills', 'average_inhibitor_kills', 'average_inhibitor_takedowns',
