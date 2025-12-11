@@ -4,6 +4,7 @@ from data_extraction.match_fetcher import MatchFetcher
 from data_preparation.data_cleaner import DataCleaner
 from helpers.parquet_handler import ParquetHandler
 from helpers.champion_ids import fetch_latest_champion_ids
+from visualization.data_visualizer import DataVisualizer
 
 from dotenv import load_dotenv
 import os
@@ -51,8 +52,8 @@ response = data_miner.start_search(search_mode="matches",
                                           target_number_of_players=1000,
                                            target_number_of_matches=1000) """
 
-# Phase 2: Fetch and enrich matches
-parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\matches_id\\1000_games.parquet"
+""" # Phase 2: Fetch and enrich matches
+
 checkpoint_path = os.path.join(data_path, "pickle", "match_fetcher_checkpoint.pkl")
 match_fetcher = MatchFetcher(requester=requester, 
                              logger=logger, 
@@ -61,8 +62,26 @@ match_fetcher = MatchFetcher(requester=requester,
                              checkpoint_loading_path=checkpoint_path,
                              load_percentage=0.01,
                              random_state=RANDOM_SEED)
-match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit_per_player=10)
+match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit_per_player=10) """
 
-#data_cleaner = DataCleaner(requester=requester, logger=logger, parquet_handler=parquet_handler)
-#data_cleaner.clean_data(raw_data_path=parquet_file_path, cleaned_data_path="F:\\Code\\lol-draft-predictor\\data\\cleaned_matches.parquet", mode="players")
 
+""" target_cleaned_file_path = "F:\\Code\\lol-draft-predictor\\data\\cleaned\\player_history.parquet"
+data_cleaner = DataCleaner(requester=requester, logger=logger, parquet_handler=parquet_handler)
+data_cleaner.clean_data(raw_data_path=parquet_file_path, cleaned_data_path=target_cleaned_file_path, mode="players") """
+
+parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\player_history.parquet"
+
+data_visualizer = DataVisualizer(logger=logger, parquet_handler=parquet_handler, random_state=RANDOM_SEED)
+data_visualizer.perform_eda(
+    prefix="player_history",
+    figsize=(12, 10),
+    cmap="viridis",
+    annot=True,
+    fmt=".2f",
+    sample_size=10000,
+    dpi=100,
+    n_estimators=5,
+    n_repeats=2,
+    data_input_path=parquet_file_path,
+    data_output_path="F:\\Code\\lol-draft-predictor\\data\\visualizations"
+)
