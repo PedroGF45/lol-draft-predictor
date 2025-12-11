@@ -70,6 +70,7 @@ class DataCleaner:
 
         self.logger.info("Data cleaning completed.")
 
+        self.parquet_handler.write_parquet(cleaned_data_without_missing, cleaned_data_path)
 
     def _remove_duplicates(self, data: pd.DataFrame) -> pd.DataFrame:
         """
