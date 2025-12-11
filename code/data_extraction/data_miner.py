@@ -1,5 +1,5 @@
 from data_extraction.requester import Requester
-from persistence.checkpoint import save_checkpoint, load_checkpoint
+from helpers.checkpoint import save_checkpoint, load_checkpoint
 from data_extraction.schemas import PLAYERS_SCHEMA, MATCHES_SCHEMA
 from typing import List
 from collections import deque
