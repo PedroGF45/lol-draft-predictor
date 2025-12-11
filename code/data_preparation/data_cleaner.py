@@ -8,10 +8,12 @@ import pandas as pd
 
 class DataCleaner:
 
-    def __init__(self, requester: Requester, logger: Logger, parquet_handler: ParquetHandler) -> None:
+    def __init__(self, requester: Requester, logger: Logger, parquet_handler: ParquetHandler, load_percentage: float = 1.0, random_state: int = 42) -> None:
         self.requester = requester
         self.logger = logger
         self.parquet_handler = parquet_handler
+        self.load_percentage = load_percentage
+        self.random_state = random_state
 
     def clean_data(self, raw_data_path: str, cleaned_data_path: str, mode: str) -> None:
 
@@ -20,7 +22,7 @@ class DataCleaner:
 
         self.logger.info(f"Starting data cleaning from {raw_data_path} to {cleaned_data_path}")
         
-        raw_data = self.parquet_handler.read_parquet(raw_data_path)
+        raw_data = self.parquet_handler.read_parquet(raw_data_path, load_percentage=self.load_percentage)
         
         # remove duplicates
         cleaned_data_without_duplicates = self._remove_duplicates(raw_data)

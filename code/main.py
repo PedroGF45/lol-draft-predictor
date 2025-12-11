@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
+RANDOM_SEED = 42
 
 print("RIOT_API_KEY: ", RIOT_API_KEY)
 
@@ -38,10 +39,10 @@ game_name = "PedroGF45"
 tag_line = "EUW"
 data_path = "F:\\Code\\lol-draft-predictor\\data"
 checkpoint_file_path = "F:\\Code\\lol-draft-predictor\\data\\pickle\\checkpoint.pkl"
-parquet_handler = ParquetHandler(logger=logger)
+parquet_handler = ParquetHandler(logger=logger, random_state=RANDOM_SEED)
 
-""" # Phase 1: Discover matches (uncomment to run discovery)
-data_miner = DataMiner(logger=logger, 
+# Phase 1: Discover matches (uncomment to run discovery)
+""" data_miner = DataMiner(logger=logger, 
                        requester=requester, 
                         raw_data_path=data_path, 
                        patient_zero_game_name=game_name, 
@@ -53,10 +54,14 @@ response = data_miner.start_search(search_mode="matches",
 # Phase 2: Fetch and enrich matches
 parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\matches_id\\1000_games.parquet"
 checkpoint_path = os.path.join(data_path, "pickle", "match_fetcher_checkpoint.pkl")
-match_fetcher = MatchFetcher(requester=requester, logger=logger, parquet_handler=parquet_handler, dataframe_target_path=data_path, checkpoint_loading_path=checkpoint_path)
-match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit=10)
-
-
+match_fetcher = MatchFetcher(requester=requester, 
+                             logger=logger, 
+                             parquet_handler=parquet_handler, 
+                             dataframe_target_path=data_path, 
+                             checkpoint_loading_path=checkpoint_path,
+                             load_percentage=0.01,
+                             random_state=RANDOM_SEED)
+match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit_per_player=10)
 
 #data_cleaner = DataCleaner(requester=requester, logger=logger, parquet_handler=parquet_handler)
 #data_cleaner.clean_data(raw_data_path=parquet_file_path, cleaned_data_path="F:\\Code\\lol-draft-predictor\\data\\cleaned_matches.parquet", mode="players")

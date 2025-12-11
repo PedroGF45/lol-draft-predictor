@@ -28,7 +28,14 @@ class MatchFetcher:
         final_player_history_df_list (list): Accumulated player history records (10 per match).
     """
 
-    def __init__(self, requester: Requester, logger: logging.Logger, parquet_handler: ParquetHandler, dataframe_target_path: str, checkpoint_loading_path: str = None) -> None:
+    def __init__(self, 
+                 requester: Requester, 
+                 logger: logging.Logger, 
+                 parquet_handler: ParquetHandler, 
+                 dataframe_target_path: str, 
+                 checkpoint_loading_path: str = None,
+                 load_percentage: float = 1.0,
+                 random_state: int = 42) -> None:
         """
         Initialize MatchFetcher with API client, logging, and optional checkpoint recovery.
 
@@ -38,11 +45,15 @@ class MatchFetcher:
             parquet_handler (ParquetHandler): Handler for reading/writing parquet files.
             dataframe_target_path (str): Directory path for output parquet files.
             checkpoint_loading_path (str, optional): Path to checkpoint file for resumption. Defaults to None.
+            load_percentage (float, optional): Percentage of data to load from parquet. Defaults to 1.0.
+            random_state (int, optional): Random seed for reproducibility. Defaults to 42.
         """
         
         self.requester = requester
         self.parquet_handler = parquet_handler
         self.logger = logger
+        self.load_percentage = load_percentage
+        self.random_state = random_state
 
         self.dataframe_target_path = dataframe_target_path
         if not os.path.exists(dataframe_target_path):
@@ -63,7 +74,7 @@ class MatchFetcher:
                 self.final_player_history_df_list = checkpoint_state.get("final_player_history_df_list", [])
                 self.logger.info(f"Resumed from checkpoint: {len(self.processed_matches)} matches already processed")
       
-    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit: int = 50, checkpoint_save_interval: int = 10) -> None:
+    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit_per_player: int = 50, checkpoint_save_interval: int = 10) -> None:
         """
         Orchestrate the enrichment pipeline: fetch match details, player state, and KPIs for all matches.
 
@@ -76,14 +87,14 @@ class MatchFetcher:
             parquet_path (str): Path to input parquet with match_id column.
             keep_remakes (bool): If False (default), skip matches < 300 seconds.
             queue (list[int]): List of queue IDs to include (default: [420=Ranked Solo, 440=Ranked Flex]).
-            match_limit (int): Number of prior matches per player to fetch for KPI aggregation (default: 50).
+            match_limit_per_player (int): Number of prior matches per player to fetch for KPI aggregation (default: 50).
             checkpoint_save_interval (int): Save checkpoint every N matches processed (default: 10).
         """
 
         if not os.path.exists(parquet_path):
             self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
         
-        match_df = self.parquet_handler.read_parquet(file_path=parquet_path)
+        match_df = self.parquet_handler.read_parquet(file_path=parquet_path, load_percentage=self.load_percentage)
 
         # Add progress bar for match processing
         total_matches = len(match_df)
@@ -139,7 +150,7 @@ class MatchFetcher:
 
             # get raw kpis for each participant on last 100 matches before this match
             current_match_timestamp_creation = match_pre_features.get("game_creation")
-            kpis_data = self.fetch_raw_player_kpis(participants=participants, match_limit=match_limit, before_timestamp=current_match_timestamp_creation)
+            kpis_data = self.fetch_raw_player_kpis(participants=participants, match_limit_per_player=match_limit_per_player, before_timestamp=current_match_timestamp_creation)
             self.logger.debug(f'KPIs Data: {kpis_data}')
 
             # create match record with match schema
@@ -428,16 +439,16 @@ class MatchFetcher:
 
         return rank_queue_data
     
-    def fetch_raw_player_kpis(self, participants: list[str], match_limit: int = 50, before_timestamp: int = None) -> dict[str, Any]:
+    def fetch_raw_player_kpis(self, participants: list[str], match_limit_per_player: int = 50, before_timestamp: int = None) -> dict[str, Any]:
         """
         Fetch raw KPI data from the last N matches for each participant, filtered by timestamp.
 
-        For each participant, retrieves their last `match_limit` match IDs before `before_timestamp`, 
+        For each participant, retrieves their last `match_limit_per_player` match IDs before `before_timestamp`, 
         then fetches detailed stats (kills, deaths, CS, gold, damage, etc.) from each match.
 
         Args:
             participants (list[str]): List of player PUUIDs.
-            match_limit (int): Number of prior matches to fetch per player (default: 50).
+            match_limit_per_player (int): Number of prior matches to fetch per player (default: 50).
             before_timestamp (int, optional): Unix timestamp to filter matches (only matches before this time). 
 
         Returns:
@@ -445,7 +456,7 @@ class MatchFetcher:
         """
         kpis_data = {}
         for puuid in participants:
-            kpis_endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit}'
+            kpis_endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit_per_player}'
             if before_timestamp:
                 kpis_endpoint += f'&endTime={before_timestamp}'
             kpis_match_ids = self.requester.make_request(is_v5=True, endpoint_url=kpis_endpoint)
@@ -762,8 +773,13 @@ class MatchFetcher:
         """
         if not kpis_data:
             return 0.0
-        total = sum(kpis.get(key, 0) for kpis in kpis_data)
+
+        total = sum(self._safe_number(kpis.get(key)) for kpis in kpis_data)
         return total / len(kpis_data)
+    
+    def _safe_number(self, value: Any) -> float:
+            # Treat None or non-numeric as zero to avoid TypeError during summation.
+            return value if isinstance(value, (int, float)) else 0.0
     
     def _calculate_kda_ratio(self, kpis_data: list[dict[str, Any]]) -> float:
         """
@@ -777,9 +793,9 @@ class MatchFetcher:
         """
         if not kpis_data:
             return 0.0
-        total_kills = sum(kpis.get("kills", 0) for kpis in kpis_data)
-        total_assists = sum(kpis.get("assists", 0) for kpis in kpis_data)
-        total_deaths = sum(kpis.get("deaths", 0) for kpis in kpis_data)
+        total_kills = sum((kpis.get("kills") or 0) for kpis in kpis_data)
+        total_assists = sum((kpis.get("assists") or 0) for kpis in kpis_data)
+        total_deaths = sum((kpis.get("deaths") or 0) for kpis in kpis_data)
         if total_deaths == 0:
             return total_kills + total_assists
         return (total_kills + total_assists) / total_deaths
@@ -797,8 +813,8 @@ class MatchFetcher:
         """
         if not kpis_data:
             return 0.0
-        total = sum(kpis.get(key, 0) for kpis in kpis_data)
-        total_minutes = sum(kpis.get("gameDuration", 0) / 60 for kpis in kpis_data)
+        total = sum((kpis.get(key) or 0) for kpis in kpis_data)
+        total_minutes = sum(((kpis.get("gameDuration") or 0) / 60) for kpis in kpis_data)
         if total_minutes == 0:
             return 0.0
         return total / total_minutes
