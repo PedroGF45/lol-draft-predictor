@@ -7,8 +7,29 @@ import pandas as pd
 
 
 class DataCleaner:
+    """
+    Cleans raw match or player parquet data by removing duplicates, handling missing values,
+    and filtering out-of-range records using domain-specific rules.
+
+    Attributes:
+        requester (Requester): HTTP client (unused in cleaning but kept for future enrichment hooks).
+        logger (Logger): Logger for status and error messages.
+        parquet_handler (ParquetHandler): Helper to read parquet inputs.
+        load_percentage (float): Fraction of rows to load from parquet.
+        random_state (int): Seed for deterministic sampling.
+    """
 
     def __init__(self, requester: Requester, logger: Logger, parquet_handler: ParquetHandler, load_percentage: float = 1.0, random_state: int = 42) -> None:
+        """
+        Initialize the cleaner with IO helpers and sampling options.
+
+        Args:
+            requester (Requester): API client (not currently used during cleaning).
+            logger (Logger): Logger instance for progress/error reporting.
+            parquet_handler (ParquetHandler): Parquet IO helper.
+            load_percentage (float): Fraction of parquet rows to load. Defaults to 1.0.
+            random_state (int): Seed used when sampling rows. Defaults to 42.
+        """
         self.requester = requester
         self.logger = logger
         self.parquet_handler = parquet_handler
@@ -16,6 +37,17 @@ class DataCleaner:
         self.random_state = random_state
 
     def clean_data(self, raw_data_path: str, cleaned_data_path: str, mode: str) -> None:
+        """
+        Run the full cleaning pipeline for match or player data.
+
+        Args:
+            raw_data_path (str): Path to the raw parquet input.
+            cleaned_data_path (str): Destination path for cleaned parquet.
+            mode (str): 'matches' to clean match data or 'players' for player history data.
+
+        Raises:
+            ValueError: If mode is not 'matches' or 'players'.
+        """
 
         if mode not in {"matches", "players"}:
             raise ValueError("mode must be either 'matches' or 'players'")
@@ -40,6 +72,15 @@ class DataCleaner:
 
 
     def _remove_duplicates(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Drop duplicate rows and log how many were removed.
+
+        Args:
+            data (pd.DataFrame): Input dataframe.
+
+        Returns:
+            pd.DataFrame: Dataframe without duplicate rows.
+        """
         self.logger.info("Removing duplicate records.")
         initial_count = len(data)
         cleaned_data = data.drop_duplicates()
@@ -48,6 +89,15 @@ class DataCleaner:
         return cleaned_data
     
     def _handle_missing_values(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Remove rows containing any missing values.
+
+        Args:
+            data (pd.DataFrame): Input dataframe.
+
+        Returns:
+            pd.DataFrame: Dataframe with missing-value rows dropped.
+        """
         self.logger.info("Handling missing values.")
         initial_count = len(data)
         cleaned_data = data.dropna()
@@ -56,13 +106,22 @@ class DataCleaner:
         return cleaned_data
 
     def _handle_matches_out_of_range_values(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Filter match records using queue, duration, boolean, and champion ID validity checks.
+
+        Args:
+            data (pd.DataFrame): Match dataframe to validate.
+
+        Returns:
+            pd.DataFrame: Filtered dataframe containing only valid match rows.
+        """
 
         self.logger.info("Handling out-of-range values for match data.")
         initial_count = len(data)
 
         # queue_id should be in a predefined set
         valid_queue_ids = {400, 420, 430, 440, 450}
-        valid_data = valid_data[valid_data['queue_id'].isin(valid_queue_ids)]
+        valid_data = data[data['queue_id'].isin(valid_queue_ids)]
 
         # game_duration should be positive and less than 2 hours (7200 seconds)
         valid_data = valid_data[(valid_data['game_duration'] > 0) & (valid_data['game_duration'] < 7200)]
@@ -89,6 +148,15 @@ class DataCleaner:
 
 
     def _handle_players_out_of_range_values(self, data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply validation rules to player history rows (IDs, roles, tiers, and numeric ranges).
+
+        Args:
+            data (pd.DataFrame): Player history dataframe to validate.
+
+        Returns:
+            pd.DataFrame: Filtered dataframe with invalid rows removed.
+        """
         
         self.logger.info("Handling out-of-range values for player history data.")
         initial_count = len(data)

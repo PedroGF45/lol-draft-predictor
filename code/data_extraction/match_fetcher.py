@@ -74,7 +74,7 @@ class MatchFetcher:
                 self.final_player_history_df_list = checkpoint_state.get("final_player_history_df_list", [])
                 self.logger.info(f"Resumed from checkpoint: {len(self.processed_matches)} matches already processed")
       
-    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit_per_player: int = 50, checkpoint_save_interval: int = 10) -> None:
+    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] | None = None, match_limit_per_player: int = 50, checkpoint_save_interval: int = 10) -> None:
         """
         Orchestrate the enrichment pipeline: fetch match details, player state, and KPIs for all matches.
 
@@ -86,10 +86,13 @@ class MatchFetcher:
         Args:
             parquet_path (str): Path to input parquet with match_id column.
             keep_remakes (bool): If False (default), skip matches < 300 seconds.
-            queue (list[int]): List of queue IDs to include (default: [420=Ranked Solo, 440=Ranked Flex]).
+            queue (list[int] | None): Queue IDs to include. Defaults to [420, 440] if None.
             match_limit_per_player (int): Number of prior matches per player to fetch for KPI aggregation (default: 50).
             checkpoint_save_interval (int): Save checkpoint every N matches processed (default: 10).
         """
+
+        if queue is None:
+            queue = [420, 440]
 
         if not os.path.exists(parquet_path):
             self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
@@ -148,7 +151,7 @@ class MatchFetcher:
             rank_queue_data = self.fetch_rank_queue_data(participants=participants)
             self.logger.debug(f'Rank Queue Data: {rank_queue_data}')
 
-            # get raw kpis for each participant on last 100 matches before this match
+            # get raw kpis for each participant on last N matches before this match
             current_match_timestamp_creation = match_pre_features.get("game_creation")
             kpis_data = self.fetch_raw_player_kpis(participants=participants, match_limit_per_player=match_limit_per_player, before_timestamp=current_match_timestamp_creation)
             self.logger.debug(f'KPIs Data: {kpis_data}')
@@ -207,7 +210,7 @@ class MatchFetcher:
         if self.checkpoint_loading_path and os.path.exists(self.checkpoint_loading_path):
             try:
                 os.remove(self.checkpoint_loading_path)
-                self.logger.info(f'Checkpoint cleared after successful completion')
+                self.logger.info('Checkpoint cleared after successful completion')
             except Exception as e:
                 self.logger.warning(f'Failed to clear checkpoint: {e}')
 
@@ -242,6 +245,11 @@ class MatchFetcher:
         
         match_details_endpoint = f'/lol/match/v5/matches/{match_id}'
         match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
+
+        # Guard against invalid or missing match details
+        if not isinstance(match_details, dict) or not match_details.get("metadata") or not match_details.get("info"):
+            self.logger.info(f'Skipping match {match_id} due to invalid match details response')
+            return None
 
         data_version = match_details.get("metadata").get("dataVersion") # version of the data schema
         game_creation = match_details.get("info").get("gameCreation") # timestamp of game creation
@@ -778,8 +786,16 @@ class MatchFetcher:
         return total / len(kpis_data)
     
     def _safe_number(self, value: Any) -> float:
-            # Treat None or non-numeric as zero to avoid TypeError during summation.
-            return value if isinstance(value, (int, float)) else 0.0
+        """
+        Convert a value to float if numeric; otherwise return 0.0.
+
+        Args:
+            value (Any): Potentially numeric value.
+
+        Returns:
+            float: Numeric value or 0.0 for None/non-numeric inputs.
+        """
+        return value if isinstance(value, (int, float)) else 0.0
     
     def _calculate_kda_ratio(self, kpis_data: list[dict[str, Any]]) -> float:
         """
