@@ -15,7 +15,21 @@ class InvalidPatientZeroError(Exception):
 
 class DataMiner():
     """
-    Docstring for DataMiner
+    Orchestrates breadth-first search (BFS) discovery of matches and players from Riot API.
+
+    Implements a resumable crawl through League of Legends match history and participant data, 
+    starting from a patient-zero summoner and expanding outward. Stores discovered players and 
+    matches while maintaining checkpoint state for recovery from interruptions.
+
+    Attributes:
+        logger (logging.Logger): Logger instance for tracking discovery progress.
+        requester (Requester): API client for making League of Legends API calls.
+        raw_data_path (str): Directory path for storing checkpoint and parquet files.
+        patient_zero_game_name (str): Summoner name of the starting player.
+        patient_zero_tag_line (str): Tag line (e.g., 'NA1') of the starting player.
+        players_queue (deque): FIFO queue of player PUUIDs awaiting match discovery.
+        seen_players (set): Set of already-processed player PUUIDs (prevents duplicate work).
+        seen_matches (set): Set of already-processed match IDs (prevents duplicate work).
     """
 
     def __init__(self, 
@@ -25,6 +39,23 @@ class DataMiner():
         patient_zero_game_name: str, 
         patient_zero_tag_line: str,
         checkpoint_loading_path: str = None) -> None:
+        """
+        Initialize DataMiner with a patient zero summoner and optional checkpoint recovery.
+
+        Validates the patient zero summoner exists in the API, initializes BFS queues, and optionally 
+        restores crawl state from a checkpoint file (for resumable discovery).
+
+        Args:
+            logger (logging.Logger): Logger instance for tracking discovery progress.
+            requester (Requester): Configured Requester for API calls.
+            raw_data_path (str): Directory path for storing checkpoints and parquet output files.
+            patient_zero_game_name (str): Summoner name of the starting player.
+            patient_zero_tag_line (str): Tag line of the starting player (e.g., 'NA1').
+            checkpoint_loading_path (str, optional): Path to checkpoint file for recovery. If None, starts fresh.
+
+        Raises:
+            InvalidPatientZeroError: If patient_zero summoner is not found or API returns error.
+        """
     
         self.logger = logger
         self.requester = requester
@@ -52,11 +83,13 @@ class DataMiner():
         
     def _is_patient_zero_valid(self) -> bool:
         """
-        Docstring for _is_patient_zero_valid
-        
-        :param self: Description
-        :return: Description
-        :rtype: bool
+        Validate that the patient zero summoner exists in the API and add them to discovery queue.
+
+        Args:
+            (none - uses self.patient_zero_game_name and self.patient_zero_tag_line)
+
+        Returns:
+            bool: True if patient zero summoner found and added to queue, False otherwise.
         """
         endpoint_url = f"/riot/account/v1/accounts/by-riot-id/{self.patient_zero_game_name}/{self.patient_zero_tag_line}"
         response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
@@ -72,11 +105,18 @@ class DataMiner():
                             target_number_of_players: int = 100,
                             target_number_of_matches: int = 100) -> None:
         """
-        Docstring for start_player_search
-        
-        :param self: Description
-        :param target_number_of_players: Description
-        :type target_number_of_players: int
+        Execute breadth-first search discovery of matches and players.
+
+        Expands outward from patient zero, discovering new matches and participants based on search mode, 
+        and continues until the target is reached. Periodically saves checkpoints for recovery.
+
+        Args:
+            search_mode (str): Type of search ('players', 'matches', or 'both'). Defaults to 'players'.
+            target_number_of_players (int): Target number of unique players to discover. Defaults to 100.
+            target_number_of_matches (int): Target number of unique matches to discover. Defaults to 100.
+
+        Returns:
+            None. Results stored in seen_players and seen_matches sets.
         """
 
         if search_mode not in ['players', 'matches']:
@@ -146,15 +186,14 @@ class DataMiner():
 
     def get_last_matches(self, puuid: str, number_of_matches: int = 100) -> List[str]:
         """
-        Docstring for get_last_matches
-        
-        :param self: Description
-        :param puuid: Description
-        :type puuid: str
-        :param number_of_matches: Description
-        :type number_of_matches: int
-        :return: Description
-        :rtype: Any
+        Fetch the last N match IDs for a given player.
+
+        Args:
+            puuid (str): The player's PUUID.
+            number_of_matches (int): Number of recent matches to fetch. Defaults to 100.
+
+        Returns:
+            List[str]: List of match IDs. Returns empty list if API request fails.
         """
         endpoint_url = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={number_of_matches}'
         response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
@@ -166,13 +205,13 @@ class DataMiner():
 
     def get_players_from_match(self, match_id: str) -> List[str]:
         """
-        Docstring for get_players_from_match
-        
-        :param self: Description
-        :param match_id: Description
-        :type match_id: str
-        :return: Description
-        :rtype: Any
+        Extract all participant PUUIDs from a match.
+
+        Args:
+            match_id (str): The ID of the match.
+
+        Returns:
+            List[str]: List of participant PUUIDs. Returns empty list if API request fails.
         """
         endpoint_url = f'/lol/match/v5/matches/{match_id}'
         response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
@@ -183,7 +222,17 @@ class DataMiner():
         return []
 
     def _has_reached_target(self, mode: str, target_players: int, target_matches: int) -> bool:
-        """Check if search target is reached based on mode."""
+        """
+        Check if discovery target is reached based on search mode.
+
+        Args:
+            mode (str): Search mode ('players', 'matches', or 'both').
+            target_players (int): Target number of players to discover.
+            target_matches (int): Target number of matches to discover.
+
+        Returns:
+            bool: True if the target for the given mode has been reached, False otherwise.
+        """
         if mode == "players":
             return len(self.seen_players) >= target_players
         elif mode == "matches":
@@ -192,6 +241,16 @@ class DataMiner():
             raise ValueError(f"Unknown search_mode: {mode}")
     
     def convert_to_dataframe(self, set_to_save: set, mode: str) -> pd.DataFrame:
+        """
+        Convert a set of player PUUIDs or match IDs to a pandas DataFrame.
+
+        Args:
+            set_to_save (set): Set of strings (PUUIDs or match IDs) to convert.
+            mode (str): Type of data ('players' for PUUIDs or 'matches' for match IDs).
+
+        Returns:
+            pd.DataFrame: DataFrame with single column ('puuid' or 'match_id'). Returns None if conversion fails.
+        """
 
         if set_to_save is None:
             self.logger.error("No set provided. Unable to convert dataframe to parquet.")
@@ -208,6 +267,20 @@ class DataMiner():
         return dataframe
     
     def save_dataframe_to_parquet(self, dataframe: pd.DataFrame, path: str, mode: str) -> None:
+        """
+        Save a DataFrame to parquet file with appropriate schema.
+
+        Creates the output directory if needed and writes the DataFrame as a timestamped parquet file 
+        using the PLAYERS_SCHEMA or MATCHES_SCHEMA based on mode.
+
+        Args:
+            dataframe (pd.DataFrame): DataFrame to save.
+            path (str): Directory path where parquet file will be written.
+            mode (str): Type of data ('players' for PLAYERS_SCHEMA or 'matches' for MATCHES_SCHEMA).
+
+        Returns:
+            None. Logs success or error messages.
+        """
 
         if not isinstance(dataframe, pd.DataFrame):
             self.logger.error("No dataframe provided. Unable to save dataframe to parquet.")

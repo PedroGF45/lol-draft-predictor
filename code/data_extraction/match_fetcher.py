@@ -8,9 +8,35 @@ import pandas as pd
 from typing import Any
 from tqdm import tqdm
 
-class MatchFetcher():
+class MatchFetcher:
+    """
+    Fetches and enriches match data from the Riot API, combining match details with player historical KPIs.
+
+    This class orchestrates the enrichment pipeline: for each match, it fetches draft information (bans, picks, roles),
+    player state (summoner level, mastery, rank), and aggregated historical statistics from prior games. Results are
+    saved as two parquet tables (matches and player_history) for downstream ML training. Supports checkpoint-based
+    resumption to recover from API interruptions.
+
+    Attributes:
+        requester (Requester): HTTP client for Riot API calls with retry/backoff.
+        logger (logging.Logger): Logger for status and error messages.
+        dataframe_target_path (str): Directory to save output parquet files.
+        checkpoint_loading_path (str, optional): Path to checkpoint file for resumable processing.
+        processed_matches (set[str]): Set of match IDs already processed (persisted to checkpoint).
+        final_match_df_list (list): Accumulated match records (one per match).
+        final_player_history_df_list (list): Accumulated player history records (10 per match).
+    """
 
     def __init__(self, requester: Requester, logger: logging.Logger,  dataframe_target_path: str, checkpoint_loading_path: str = None) -> None:
+        """
+        Initialize MatchFetcher with API client, logging, and optional checkpoint recovery.
+
+        Args:
+            requester (Requester): Configured HTTP client for API calls.
+            logger (logging.Logger): Logger instance for status/error messages.
+            dataframe_target_path (str): Directory path for output parquet files.
+            checkpoint_loading_path (str, optional): Path to checkpoint file for resumption. Defaults to None.
+        """
         
         self.requester = requester
         self.logger = logger
@@ -35,6 +61,15 @@ class MatchFetcher():
                 self.logger.info(f"Resumed from checkpoint: {len(self.processed_matches)} matches already processed")
       
     def get_dataframe_from_parquet(self, parquet_path: str) -> pd.DataFrame:
+        """
+        Load a parquet file into a pandas DataFrame.
+
+        Args:
+            parquet_path (str): Path to the parquet file.
+
+        Returns:
+            pd.DataFrame: Loaded DataFrame, or empty DataFrame if load fails.
+        """
 
         try:
             match_df = pd.read_parquet(parquet_path)
@@ -47,6 +82,21 @@ class MatchFetcher():
         return match_df
 
     def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit: int = 50, checkpoint_save_interval: int = 10) -> None:
+        """
+        Orchestrate the enrichment pipeline: fetch match details, player state, and KPIs for all matches.
+
+        Processes each match in the input parquet file (loading draft features, summoner level, mastery, rank, and
+        historical KPIs). Skips remakes, non-ranked queues, and already-processed matches (from checkpoint). Saves
+        two output parquet files: matches.parquet (1 row per match) and player_history.parquet (10 rows per match).
+        Periodically checkpoints progress for resumable processing.
+
+        Args:
+            parquet_path (str): Path to input parquet with match_id column.
+            keep_remakes (bool): If False (default), skip matches < 300 seconds.
+            queue (list[int]): List of queue IDs to include (default: [420=Ranked Solo, 440=Ranked Flex]).
+            match_limit (int): Number of prior matches per player to fetch for KPI aggregation (default: 50).
+            checkpoint_save_interval (int): Save checkpoint every N matches processed (default: 10).
+        """
 
         if not os.path.exists(parquet_path):
             self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
@@ -169,7 +219,11 @@ class MatchFetcher():
                 self.logger.warning(f'Failed to clear checkpoint: {e}')
 
     def _save_checkpoint(self) -> None:
-        """Save current progress (processed matches and dataframes) to checkpoint file."""
+        """
+        Save current progress (processed matches and dataframe rows) to checkpoint file.
+
+        Allows the pipeline to resume from the exact point of interruption without reprocessing.
+        """
         if not self.checkpoint_loading_path:
             self.logger.warning('Checkpoint loading path not set; skipping checkpoint save.')
             return
@@ -182,7 +236,17 @@ class MatchFetcher():
         save_checkpoint(logger=self.logger, state=checkpoint_state, path=self.checkpoint_loading_path)
 
     def fetch_match_pre_features(self, match_id: str) -> dict[str, Any]:
-    
+        """
+        Fetch draft-related features for a single match: bans, picks, roles, and outcome.
+
+        Args:
+            match_id (str): Riot match ID (e.g., 'EUW1_7586168110').
+
+        Returns:
+            dict[str, Any]: Match features including game metadata, bans, picks, team roles, and outcome. 
+                           Returns None if match data is invalid or incomplete (e.g., missing teams).
+        """
+        
         match_details_endpoint = f'/lol/match/v5/matches/{match_id}'
         match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
 
@@ -266,6 +330,15 @@ class MatchFetcher():
         return match_pre_features
     
     def fetch_summoner_level_data(self, participants: list[str]) -> dict[str, Any]:
+        """
+        Fetch summoner level for each participant.
+
+        Args:
+            participants (list[str]): List of player PUUIDs.
+
+        Returns:
+            dict[str, Any]: Mapping of PUUID → summoner level (int).
+        """
         
         summoner_levels = {}
         for puuid in participants:
@@ -279,6 +352,16 @@ class MatchFetcher():
         return summoner_levels
     
     def fetch_champion_mastery_data(self, participants: list[str], champion_picks: list[int]) -> dict[str, Any]:
+        """
+        Fetch champion mastery stats (level, points, last played) for each participant's picked champion.
+
+        Args:
+            participants (list[str]): List of player PUUIDs.
+            champion_picks (list[int]): List of champion IDs picked (ordered same as participants).
+
+        Returns:
+            dict[str, Any]: Mapping of PUUID → {lastPlayTime, championLevel, championPoints}.
+        """
         champion_masteries = {}
         
         for puuid in participants:
@@ -300,6 +383,15 @@ class MatchFetcher():
         return champion_masteries
     
     def fetch_total_mastery_score(self, participants: list[str]) -> dict[str, int]:
+        """
+        Fetch total champion mastery score for each participant (across all champions).
+
+        Args:
+            participants (list[str]): List of player PUUIDs.
+
+        Returns:
+            dict[str, int]: Mapping of PUUID → total mastery score (int).
+        """
         total_mastery_scores = {}
         for puuid in participants:
             total_mastery_endpoint = f'/lol/champion-mastery/v4/scores/by-puuid/{puuid}'
@@ -310,6 +402,15 @@ class MatchFetcher():
         return total_mastery_scores
     
     def fetch_rank_queue_data(self, participants: list[str]) -> dict[str, Any]:
+        """
+        Fetch ranked queue info (tier, rank, LP, wins/losses) for solo and flex queues.
+
+        Args:
+            participants (list[str]): List of player PUUIDs.
+
+        Returns:
+            dict[str, Any]: Mapping of PUUID_solo/PUUID_flex → {tier, rank, leaguePoints, wins, losses, hotStreak}.
+        """
         rank_queue_data = {}
         for puuid in participants:
             summoner_endpoint = f'/lol/league/v4/entries/by-puuid/{puuid}'
@@ -346,6 +447,20 @@ class MatchFetcher():
         return rank_queue_data
     
     def fetch_raw_player_kpis(self, participants: list[str], match_limit: int = 50, before_timestamp: int = None) -> dict[str, Any]:
+        """
+        Fetch raw KPI data from the last N matches for each participant, filtered by timestamp.
+
+        For each participant, retrieves their last `match_limit` match IDs before `before_timestamp`, 
+        then fetches detailed stats (kills, deaths, CS, gold, damage, etc.) from each match.
+
+        Args:
+            participants (list[str]): List of player PUUIDs.
+            match_limit (int): Number of prior matches to fetch per player (default: 50).
+            before_timestamp (int, optional): Unix timestamp to filter matches (only matches before this time). 
+
+        Returns:
+            dict[str, Any]: Mapping of PUUID → list of match KPI dicts (70+ stat fields per match).
+        """
         kpis_data = {}
         for puuid in participants:
             kpis_endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit}'
@@ -462,6 +577,18 @@ class MatchFetcher():
         return kpis_data
     
     def create_match_record(self, match_id: str, match_pre_features: dict[str, Any]) -> dict[str, Any]:
+        """
+        Construct a single match record for the matches.parquet output table.
+
+        Flattens draft bans/picks into 20 champion ID columns and includes match metadata and outcome.
+
+        Args:
+            match_id (str): Riot match ID.
+            match_pre_features (dict[str, Any]): Match features dict with bans, picks, metadata, outcome.
+
+        Returns:
+            dict[str, Any]: Flat dict with 25 columns (match_id, queue_id, game_version, game_duration, team1_win, 10 bans, 10 picks).
+        """
         match_record = {
             "match_id": match_id,
             "queue_id": match_pre_features.get("queue_id"),
@@ -505,6 +632,27 @@ class MatchFetcher():
                                     champion_total_mastery_score: int, 
                                     rank_queue_data: dict[str, Any],
                                     kpis_data: list[dict[str, Any]]) -> dict[str, Any]:
+        """
+        Construct a single player history record for the player_history.parquet output table.
+
+        Aggregates player state (summoner level, mastery, rank) and KPIs (win rate, KDA, per-minute stats) 
+        from prior matches into a single row per player per match.
+
+        Args:
+            match_id (str): Riot match ID.
+            puuid (str): Player PUUID.
+            team_id (int): Team ID (100 or 200).
+            role (str): Position in match (TOP, JUNGLE, MIDDLE, BOTTOM, UTILITY).
+            champion_id (int): Champion ID picked.
+            summoner_level (int): Summoner account level.
+            champion_mastery (dict[str, Any]): Mastery level, points, last played time.
+            champion_total_mastery_score (int): Total mastery across all champions.
+            rank_queue_data (dict[str, Any]): Rank tier, LP, wins/losses for solo/flex queues.
+            kpis_data (list[dict[str, Any]]): List of KPI dicts from prior matches.
+
+        Returns:
+            dict[str, Any]: Flat dict with 27 columns (state + aggregated KPIs).
+        """
         player_history_record = {
             'match_id': match_id,
             'puuid': puuid,
@@ -542,18 +690,46 @@ class MatchFetcher():
         return player_history_record
 
     def _calculate_win_rate(self, kpis_data: list[dict[str, Any]]) -> float:
+        """
+        Calculate win rate from a list of match KPIs.
+
+        Args:
+            kpis_data (list[dict[str, Any]]): List of KPI dicts from prior matches.
+
+        Returns:
+            float: Win rate as a fraction [0, 1]. Returns 0.0 if list is empty.
+        """
         if not kpis_data:
             return 0.0
         wins = sum(1 for kpis in kpis_data if kpis.get("win"))
         return wins / len(kpis_data)
     
     def _calculate_average(self, kpis_data: list[dict[str, Any]], key: str) -> float:
+        """
+        Calculate the average value of a stat across prior matches.
+
+        Args:
+            kpis_data (list[dict[str, Any]]): List of KPI dicts.
+            key (str): Stat key to average (e.g., 'kills', 'totalMinionsKilled').
+
+        Returns:
+            float: Average value. Returns 0.0 if list is empty.
+        """
         if not kpis_data:
             return 0.0
         total = sum(kpis.get(key, 0) for kpis in kpis_data)
         return total / len(kpis_data)
     
     def _calculate_kda_ratio(self, kpis_data: list[dict[str, Any]]) -> float:
+        """
+        Calculate the KDA (Kill+Death Assist / Death) ratio from prior matches.
+
+        Args:
+            kpis_data (list[dict[str, Any]]): List of KPI dicts.
+
+        Returns:
+            float: KDA ratio. Returns total kills + assists if deaths == 0; returns 0.0 if list is empty.
+        """
         if not kpis_data:
             return 0.0
         total_kills = sum(kpis.get("kills", 0) for kpis in kpis_data)
@@ -564,6 +740,16 @@ class MatchFetcher():
         return (total_kills + total_assists) / total_deaths
     
     def _calculate_per_minute(self, kpis_data: list[dict[str, Any]], key: str) -> float:
+        """
+        Calculate the per-minute rate of a statistic from prior matches.
+
+        Args:
+            kpis_data (list[dict[str, Any]]): List of KPI dicts containing 'gameDuration' and stat keys.
+            key (str): The statistic key to aggregate (e.g., 'kills', 'cs').
+
+        Returns:
+            float: The per-minute rate. Returns 0.0 if kpis_data is empty or total_minutes is zero.
+        """
         if not kpis_data:
             return 0.0
         total = sum(kpis.get(key, 0) for kpis in kpis_data)
