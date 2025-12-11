@@ -66,3 +66,34 @@ class ParquetHandler:
         except Exception as e:
             self.logger.error(f"Error writing parquet file to {file_path}: {e}")
             raise
+
+    def check_directory_exists(self, dir_path: str) -> bool:
+        """
+        Check if a directory exists.
+
+        Args:
+            dir_path (str): Path to the directory.
+        Returns:
+            bool: True if the directory exists, False otherwise.
+
+        """
+        exists = os.path.isdir(dir_path)
+        if exists:
+            self.logger.info(f"Directory exists: {dir_path}")
+        else:
+            self.logger.warning(f"Directory does not exist: {dir_path}")
+        return exists
+    
+    def create_directory(self, dir_path: str) -> None:
+        """
+        Create a directory if it does not exist.
+
+        Args:
+            dir_path (str): Path to the directory.
+        """
+        try:
+            os.makedirs(dir_path, exist_ok=True)
+            self.logger.info(f"Directory created or already exists: {dir_path}")
+        except Exception as e:
+            self.logger.error(f"Error creating directory {dir_path}: {e}")
+            raise
