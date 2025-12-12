@@ -5,7 +5,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 
 class DataVisualizer:
@@ -32,6 +32,7 @@ class DataVisualizer:
     def perform_eda(self,
                     data_input_path: str,
                     data_output_path: str,
+                    mode: str,
                     plots: list = ["summary_statistics", "correlation_heatmap", "histogram", "violin", "scatter", "all_distributions", "skewness", "kurtosis", "feature_importance"],
                     prefix: str = "data",
                     figsize: tuple = (10, 8),
@@ -66,12 +67,38 @@ class DataVisualizer:
             n_repeats (int): Number of times to permute a feature for importance analysis. Defaults to 2.
         """
 
+        if mode not in ["matches", "players"]:
+            self.logger.error(f"Invalid mode '{mode}'. Choose either 'matches' or 'players'.")
+            return
+
+        # Branch output path based on mode, similar to parquet cleaning pipeline
+        if mode == "matches":
+            data_output_path = os.path.join(data_output_path, "matches")
+        else:
+            data_output_path = os.path.join(data_output_path, "players")
+
         data = self.parquet_handler.read_parquet(file_path=data_input_path, load_percentage=1.0)
 
         if self.parquet_handler.check_directory_exists(data_output_path) is False:
             os.makedirs(data_output_path, exist_ok=True)
 
+        # Add timestamp to prefix for unique file naming, matching parquet convention
+        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        prefix = f"{timestamp}_{prefix}"
+
         numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
+
+        if mode == "matches" and "team1_win" not in data.columns:
+            self.logger.error("Target column 'team1_win' not found in the data for matches mode.")
+            return
+        
+        if mode == "players" and "win_rate" not in data.columns:
+            self.logger.error("Target column 'win_rate' not found in the data for players mode.")
+            return
+        
+        # remove win_rate from numeric_cols to avoid leakage
+        if mode == "players" and "win_rate" in numeric_cols:
+            numeric_cols.remove("win_rate")
 
         if "summary_statistics" in plots:
             self.create_summary_statistics_to_csv(data[numeric_cols], 
@@ -130,13 +157,18 @@ class DataVisualizer:
                               sample_size=sample_size)
             
         if "feature_importance" in plots:
+            if mode == "matches":
+                target_column = "team1_win"
+            else:
+                target_column = "win_rate"
             self.analyze_feature_importance(data=data, 
-                                        target_column="win_rate",
+                                        target_column=target_column,
                                         numeric_columns=numeric_cols, 
                                         output_path=f"{data_output_path}/{prefix}_feature_importance.png", 
                                         n_estimators=n_estimators, 
                                         n_repeats=n_repeats,
-                                        sample_size=sample_size)
+                                        sample_size=sample_size,
+                                        mode=mode)
 
     def create_summary_statistics_to_csv(self, data: pd.DataFrame, output_path: str, sample_size: int = 10000) -> None:
         """
@@ -333,7 +365,7 @@ class DataVisualizer:
         self.logger.info(f"Kurtosis values saved to {output_path}")
 
 
-    def analyze_feature_importance(self, data: pd.DataFrame, target_column: str, numeric_columns: list[str], output_path: str, n_estimators: int = 100, n_repeats: int = 5, sample_size: int = 10000) -> None:
+    def analyze_feature_importance(self, data: pd.DataFrame, target_column: str, numeric_columns: list[str], output_path: str, n_estimators: int = 100, n_repeats: int = 5, sample_size: int = 10000, mode: str = "matches") -> None:
         """
         Analyze and save feature importance using permutation importance.
 
@@ -348,10 +380,14 @@ class DataVisualizer:
         """
         sampled_data = data.sample(n=min(sample_size, len(data)), random_state=self.random_state)
 
-        X = sampled_data[numeric_columns].drop(columns=[target_column])
+        X = sampled_data.drop(columns=[target_column])[numeric_columns]
         y = sampled_data[target_column]
 
-        model = RandomForestRegressor(n_estimators=n_estimators, random_state=self.random_state)
+        if mode == "players":
+            model = RandomForestRegressor(n_estimators=n_estimators, random_state=self.random_state)
+        else:
+            model = RandomForestClassifier(n_estimators=n_estimators, random_state=self.random_state, class_weight='balanced')
+        
         model.fit(X, y)
 
         result = permutation_importance(model, X, y, n_repeats=n_repeats, random_state=self.random_state)

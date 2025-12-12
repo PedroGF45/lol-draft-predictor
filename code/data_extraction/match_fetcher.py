@@ -55,10 +55,10 @@ class MatchFetcher:
         self.load_percentage = load_percentage
         self.random_state = random_state
 
-        self.dataframe_target_path = dataframe_target_path
-        if not os.path.exists(dataframe_target_path):
-            logger.warning(f'Dataframe target path is not valid. Defaulting to "data/players"')
-            self.dataframe_target_path = "./data/players"
+        self.dataframe_target_path = os.path.join(dataframe_target_path, "preprocess")
+        
+        if not self.parquet_handler.check_directory_exists(self.dataframe_target_path):
+            self.parquet_handler.create_directory(self.dataframe_target_path)
         
         # Initialize checkpoint state
         self.checkpoint_loading_path = checkpoint_loading_path
@@ -190,22 +190,21 @@ class MatchFetcher:
         final_match_df = pd.DataFrame(self.final_match_df_list)
         final_player_history_df = pd.DataFrame(self.final_player_history_df_list)
 
-        self.logger.info(f'Final Dataframe Info: {final_match_df.info()}')
         self.logger.info(f'Final Dataframe Head: {final_match_df.head()}')
         self.logger.info(f'Final Dataframde description: {final_match_df.describe()}')
 
-        self.logger.info(f'Final Player History Dataframe Info: {final_player_history_df.info()}')
         self.logger.info(f'Final Player History Dataframe Head: {final_player_history_df.head()}')
         self.logger.info(f'Final Player History Dataframde description: {final_player_history_df.describe()}')
         
-        # sufix with current date, number of matches saved, number of matches_per_player
-        current_date = pd.Timestamp.now().strftime('%Y%m%d')
-        match_path_sufix = f'{current_date}_matches_{len(final_match_df)}_players_per_match_{match_limit_per_player}'
-        match_output_path = os.path.join(self.dataframe_target_path, f'matches_{match_path_sufix}.parquet')
-        final_match_df.to_parquet(match_output_path, index=False)
+        # suffix with detailed timestamp, number of matches saved, number of matches_per_player
+        current_date = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        match_path_sufix = f'{current_date}_{len(final_match_df)}_matches_{match_limit_per_player}_players_per_match'
+        match_output_path = os.path.join(self.dataframe_target_path, "matches", f'{match_path_sufix}.parquet')
+        self.parquet_handler.write_parquet(data=final_match_df, file_path=match_output_path)
         self.logger.info(f'Match Dataframe saved to {match_output_path}')
-        player_history_output_path = os.path.join(self.dataframe_target_path, f'player_history_{match_path_sufix}.parquet')
-        final_player_history_df.to_parquet(player_history_output_path, index=False)
+
+        player_history_output_path = os.path.join(self.dataframe_target_path, "players", f'{match_path_sufix}.parquet')
+        self.parquet_handler.write_parquet(data=final_player_history_df, file_path=player_history_output_path)
         self.logger.info(f'Player History Dataframe saved to {player_history_output_path}')
         
         # Clear checkpoint after successful completion

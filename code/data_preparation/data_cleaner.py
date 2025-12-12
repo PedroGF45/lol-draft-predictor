@@ -4,6 +4,7 @@ from helpers.champion_ids import fetch_latest_champion_ids
 
 from logging import Logger
 import pandas as pd
+import os
 
 
 class DataCleaner:
@@ -62,6 +63,7 @@ class DataCleaner:
         # handle missing values
         cleaned_data_without_missing = self._handle_missing_values(cleaned_data_without_duplicates)
         
+        
         # handle out of range values
         if mode == "matches":
             cleaned_data_without_missing = self._handle_matches_out_of_range_values(cleaned_data_without_missing)
@@ -70,6 +72,11 @@ class DataCleaner:
 
         self.logger.info("Data cleaning completed.")
 
+        parquet_file_name = os.path.basename(raw_data_path)
+        if mode == "matches":
+            cleaned_data_path = os.path.join(cleaned_data_path, "clean", "matches", parquet_file_name)
+        else:
+            cleaned_data_path = os.path.join(cleaned_data_path, "clean", "players", parquet_file_name)
         self.parquet_handler.write_parquet(cleaned_data_without_missing, cleaned_data_path)
 
     def _remove_duplicates(self, data: pd.DataFrame) -> pd.DataFrame:
