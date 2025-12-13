@@ -224,13 +224,27 @@ class MatchFetcher:
         if not self.checkpoint_loading_path:
             self.logger.warning('Checkpoint loading path not set; skipping checkpoint save.')
             return
-        
+
+        checkpoint_dir = (
+            os.path.dirname(self.checkpoint_loading_path)
+            if os.path.splitext(self.checkpoint_loading_path)[1]
+            else self.checkpoint_loading_path
+        )
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        checkpoint_filename = f"{timestamp}_{len(self.processed_matches)}_matches_checkpoint.pkl"
+        checkpoint_path = os.path.join(checkpoint_dir, checkpoint_filename)
+
         checkpoint_state = {
             "processed_matches": self.processed_matches,
             "final_match_df_list": self.final_match_df_list,
             "final_player_history_df_list": self.final_player_history_df_list
         }
-        save_checkpoint(logger=self.logger, state=checkpoint_state, path=self.checkpoint_loading_path)
+        save_checkpoint(logger=self.logger, state=checkpoint_state, path=checkpoint_path)
+
+        # Keep latest path for cleanup
+        self.checkpoint_loading_path = checkpoint_path
 
     def fetch_match_pre_features(self, match_id: str) -> dict[str, Any]:
         """
