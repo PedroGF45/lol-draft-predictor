@@ -30,8 +30,9 @@ class DataVisualizer:
         self.random_state = random_state
 
     def perform_eda(self,
-                    data_input_path: str,
+                    data_handler,
                     data_output_path: str,
+                    data_split: str = "full",
                     target_column: str = "team1_win",
                     plots: list = ["summary_statistics", "correlation_heatmap", "histogram", "violin", "scatter", "all_distributions", "skewness", "kurtosis", "feature_importance"],
                     prefix: str = "data",
@@ -52,8 +53,10 @@ class DataVisualizer:
         All methods use the sample_size parameter to limit data for performance.
 
         Args:
-            data_input_path (str): Path to the input parquet data file.
+            data_handler (DataHandler): DataHandler instance containing the data to visualize.
             data_output_path (str): Directory path to save the output plots.
+            data_split (str): Which data to visualize - "full" (entire dataframe), "train", or "test". 
+                Defaults to "full".
             target_column (str): Name of the target column for supervised learning analysis. 
                 Defaults to "team1_win".
             plots (list): List of plot types to generate. Options: "summary_statistics",
@@ -72,18 +75,43 @@ class DataVisualizer:
                 Defaults to True.
         """
 
-        data = self.parquet_handler.read_parquet(file_path=data_input_path, load_percentage=1.0)
+        # Get data from DataHandler based on split preference
+        if data_split == "full":
+            try:
+                data = data_handler.get_combined_dataframe()
+            except ValueError as e:
+                self.logger.error(f"Cannot get dataframe from DataHandler: {e}")
+                return
+        elif data_split == "train":
+            if data_handler.get_data_train() is None:
+                self.logger.error("No training data in DataHandler. Run split_data() first.")
+                return
+            # Combine train data and labels for visualization
+            data = data_handler.get_data_train().copy()
+            data[target_column] = data_handler.get_labels_train()
+        elif data_split == "test":
+            if data_handler.get_data_test() is None:
+                self.logger.error("No test data in DataHandler. Run split_data() first.")
+                return
+            # Combine test data and labels for visualization
+            data = data_handler.get_data_test().copy()
+            data[target_column] = data_handler.get_labels_test()
+        else:
+            self.logger.error(f"Invalid data_split '{data_split}'. Choose 'full', 'train', or 'test'.")
+            return
 
         if target_column not in data.columns:
             self.logger.error(f"Target column '{target_column}' not found in the data.")
             return
+        
+        self.logger.info(f"Performing EDA on {data_split} dataset with {len(data)} samples.")
 
         if self.parquet_handler.check_directory_exists(data_output_path) is False:
             os.makedirs(data_output_path, exist_ok=True)
 
-        # Add timestamp to prefix for unique file naming, matching parquet convention
+        # Add timestamp and data_split to prefix for unique file naming
         timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-        prefix = f"{timestamp}_{prefix}"
+        prefix = f"{timestamp}_{data_split}_{prefix}"
 
         numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
         

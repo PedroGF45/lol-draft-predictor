@@ -2,6 +2,9 @@ from data_extraction.requester import Requester
 from data_extraction.data_miner import DataMiner, InvalidPatientZeroError
 from data_extraction.match_fetcher import MatchFetcher
 from data_preparation.data_cleaner import DataCleaner
+from data_preparation.data_handler import DataHandler
+from feature_engineering.feature_engineer import FeatureEngineer
+from feature_engineering.dimension_reducer import DimensionReducer
 from helpers.parquet_handler import ParquetHandler
 from helpers.champion_ids import fetch_latest_champion_ids
 from visualization.data_visualizer import DataVisualizer
@@ -21,9 +24,14 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
-DATA_PATH = os.getenv("DATA_PATH")
-CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH")
-PARQUET_PATH = os.getenv("PARQUET_PATH")
+RAW_DATA_PATH = os.getenv("RAW_DATA_PATH")
+EXPLORATION_DATA_PATH = os.getenv("EXPLORATION_DATA_PATH")
+CLEANED_DATA_PATH = os.getenv("CLEANED_DATA_PATH")
+PREPROCESSED_DATA_PATH = os.getenv("PREPROCESSED_DATA_PATH")
+FEATURE_ENGINEER_DATA_PATH = os.getenv("FEATURE_ENGINEER_DATA_PATH")
+VISUALIZATIONS_PATH = os.getenv("VISUALIZATIONS_PATH")
+MATCHES_PARQUET_PATH = os.getenv("MATCHES_PARQUET_PATH")
+PLAYERS_PARQUET_PATH = os.getenv("PLAYERS_PARQUET_PATH")
 RANDOM_SEED = 42
 
 print("RIOT_API_KEY: ", RIOT_API_KEY)
@@ -52,7 +60,7 @@ data_miner = DataMiner(logger=logger,
                         patient_zero_tag_line=tag_line)
 response = data_miner.start_search(search_mode="matches", 
                                           target_number_of_players=1000,
-                                           target_number_of_matches=100) """
+                                           target_number_of_matches=100) 
 
 # Phase 2: Fetch and enrich matches
 
@@ -64,13 +72,49 @@ match_fetcher = MatchFetcher(requester=requester,
                              load_percentage=100,
                              random_state=RANDOM_SEED)
 match_fetcher.fetch_match_data(parquet_path=PARQUET_PATH, match_limit_per_player=10)
-
 """
-target_cleaned_file_path = "F:\\Code\\lol-draft-predictor\\data\\cleaned\\player_history.parquet"
-data_cleaner = DataCleaner(requester=requester, logger=logger, parquet_handler=parquet_handler)
-data_cleaner.clean_data(raw_data_path=parquet_file_path, cleaned_data_path=target_cleaned_file_path, mode="players") 
 
-parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\player_history.parquet"
+data_handler = DataHandler(logger=logger, parquet_handler=parquet_handler, target_feature="team1_win", random_state=RANDOM_SEED)
+data_handler.load_splits(input_dir=CLEANED_DATA_PATH, timestamp="20251218_210913")
+
+
+""" data_handler.join_match_and_player_data(
+    match_parquet_path=MATCHES_PARQUET_PATH,
+    player_parquet_path=PLAYERS_PARQUET_PATH
+)
+
+data_handler.split_data()
+
+data_cleaner = DataCleaner(requester=requester, logger=logger, data_handler=data_handler, parquet_handler=parquet_handler)
+data_cleaner.clean_data(output_path=CLEANED_DATA_PATH) 
+
+
+data_visualizer = DataVisualizer(logger=logger, parquet_handler=parquet_handler, random_state=RANDOM_SEED)
+data_visualizer.perform_eda(
+    plots="feature_importance",
+    prefix="player_history",
+    figsize=(12, 10),
+    cmap="viridis",
+    annot=True,
+    fmt=".2f",
+    sample_size=10000,
+    dpi=100,
+    n_estimators=5,
+    n_repeats=2,
+    data_handler=data_handler,
+    data_output_path="F:\\Code\\lol-draft-predictor\\data\\visualizations"
+)
+"""
+
+feature_engineer = FeatureEngineer(logger=logger, parquet_handler=parquet_handler, random_state=RANDOM_SEED)
+feature_engineer.perform_feature_engineering(data_handler=data_handler, output_dir=FEATURE_ENGINEER_DATA_PATH)
+
+dimension_reducer = DimensionReducer(logger=logger, parquet_handler=parquet_handler)
+dimension_reducer.perform_dimension_reduction(
+    data_handler=data_handler,
+    pca_plot_dir=VISUALIZATIONS_PATH,
+    output_dir=FEATURE_ENGINEER_DATA_PATH
+)
 
 data_visualizer = DataVisualizer(logger=logger, parquet_handler=parquet_handler, random_state=RANDOM_SEED)
 data_visualizer.perform_eda(
@@ -83,6 +127,6 @@ data_visualizer.perform_eda(
     dpi=100,
     n_estimators=5,
     n_repeats=2,
-    data_input_path=parquet_file_path,
-    data_output_path="F:\\Code\\lol-draft-predictor\\data\\visualizations"
-)"""
+    data_handler=data_handler,
+    data_output_path=VISUALIZATIONS_PATH
+)
