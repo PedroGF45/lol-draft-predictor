@@ -40,7 +40,8 @@ class DataMiner():
         raw_data_path: str, 
         patient_zero_game_name: str, 
         patient_zero_tag_line: str,
-        checkpoint_loading_path: str = None) -> None:
+        checkpoint_loading_path: str = None,
+        checkpoint_save_path: str = None) -> None:
         """
         Initialize DataMiner with a patient zero summoner and optional checkpoint recovery.
 
@@ -50,10 +51,11 @@ class DataMiner():
         Args:
             logger (logging.Logger): Logger instance for tracking discovery progress.
             requester (Requester): Configured Requester for API calls.
-            raw_data_path (str): Directory path for storing checkpoints and parquet output files.
+            raw_data_path (str): Directory path for storing match/player parquet output files.
             patient_zero_game_name (str): Summoner name of the starting player.
-            patient_zero_tag_line (str): Tag line of the starting player (e.g., 'NA1').
+            patient_zero_tag_line: (str): Tag line of the starting player (e.g., 'NA1').
             checkpoint_loading_path (str, optional): Path to checkpoint file for recovery. If None, starts fresh.
+            checkpoint_save_path (str, optional): Directory path for saving new checkpoints. Required to save checkpoints.
 
         Raises:
             InvalidPatientZeroError: If patient_zero summoner is not found or API returns error.
@@ -64,6 +66,7 @@ class DataMiner():
         self.parquet_handler = parquet_handler
 
         self.raw_data_path = raw_data_path
+        self.checkpoint_save_path = checkpoint_save_path
 
         self.patient_zero_game_name = patient_zero_game_name
         self.patient_zero_tag_line = patient_zero_tag_line
@@ -173,7 +176,13 @@ class DataMiner():
 
             # sufix with detailed timestamp number of players and matches
             timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-            checkpoint_path = os.path.join(self.raw_data_path, f"exploration\\checkpoint\\{timestamp}_{len(self.seen_players)}_players_{len(self.seen_matches)}_matches.pkl")
+            
+            if self.checkpoint_save_path:
+                os.makedirs(self.checkpoint_save_path, exist_ok=True)
+                checkpoint_path = os.path.join(self.checkpoint_save_path, f"{timestamp}_{len(self.seen_players)}_players_{len(self.seen_matches)}_matches.pkl")
+            else:
+                raise ValueError("checkpoint_save_path must be provided to save checkpoints")
+                
             save_checkpoint(logger=self.logger, state=checkpoint_dict, path=checkpoint_path)
 
         players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players, mode="players")
