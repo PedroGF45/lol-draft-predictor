@@ -78,8 +78,8 @@ class DataCleaner:
 
         # save cleaned data if output path is provided
         if output_path:
-            self.data_handler.save_cleaned_data(output_path)
-            self.logger.info(f"Cleaned data saved to {output_path}")
+            saved_dir = self.data_handler.save_splits(output_path)
+            self.logger.info(f"Cleaned data saved to {saved_dir}")
 
         self.logger.info("Data cleaning completed.")
 

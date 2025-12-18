@@ -14,11 +14,12 @@ class DataHandler:
         self.test_size = test_size
         self.random_state = random_state
 
-        self.dataframe = None
         self.data_train = None
         self.data_test = None
         self.labels_train = None
         self.labels_test = None
+        
+        self._temp_dataframe = None
 
         # Use sets to track feature names
         self.categorical_features = set()
@@ -65,6 +66,35 @@ class DataHandler:
 
     def add_numerical_feature(self, feature_name):
         self.numerical_features.add(feature_name)
+    
+    def get_combined_dataframe(self) -> pd.DataFrame:
+        """
+        Get the full combined dataframe.
+        
+        If data hasn't been split yet, returns the original dataframe from load/join.
+        If data has been split, reconstructs the full dataframe by concatenating
+        train/test splits with their labels.
+        
+        Returns:
+            pd.DataFrame: The combined dataframe with all rows and the target column.
+            
+        Raises:
+            ValueError: If no data has been loaded or split.
+        """
+        # If we have splits, reconstruct from them
+        if self.data_train is not None and self.data_test is not None:
+            # Combine train and test data
+            combined_data = pd.concat([self.data_train, self.data_test], ignore_index=False)
+            # Add labels
+            combined_labels = pd.concat([self.labels_train, self.labels_test], ignore_index=False)
+            combined_data[self.target_feature] = combined_labels
+            return combined_data
+        
+        # Otherwise return temp dataframe if available
+        if self._temp_dataframe is not None:
+            return self._temp_dataframe.copy()
+        
+        raise ValueError("No data loaded. Call load_data or join_match_and_player_data first.")
 
     def _categorize_features(self) -> dict:
         """
@@ -79,10 +109,15 @@ class DataHandler:
                 - 'team_aggregated': Aggregated team statistics (avg_*)
                 - 'target': Target variable
         """
-        if self.dataframe is None:
+        # Get available dataframe (either temp or reconstructed from splits)
+        if self._temp_dataframe is not None:
+            dataframe = self._temp_dataframe
+        elif self.data_train is not None:
+            dataframe = self.get_combined_dataframe()
+        else:
             raise ValueError("No dataframe loaded. Call load_data or join_match_and_player_data first.")
         
-        cols = set(self.dataframe.columns)
+        cols = set(dataframe.columns)
         
         categorized = {
             'match_meta': [],
@@ -117,14 +152,13 @@ class DataHandler:
         Returns:
             dict: Summary statistics about the loaded features.
         """
-        if self.dataframe is None:
-            raise ValueError("No dataframe loaded.")
+        dataframe = self.get_combined_dataframe()
         
         categorized = self._categorize_features()
         
         summary = {
-            'total_features': len(self.dataframe.columns) - 1,  # Exclude target
-            'total_rows': len(self.dataframe),
+            'total_features': len(dataframe.columns) - 1,  # Exclude target
+            'total_rows': len(dataframe),
             'feature_breakdown': {
                 'match_metadata': len(categorized['match_meta']),
                 'draft_bans': len(categorized['draft_bans']),
@@ -141,15 +175,15 @@ class DataHandler:
 
     def load_data(self, parquet_path: str, load_percentage: float = 1.0):
         """
-        Load a single parquet file into the dataframe.
+        Load a single parquet file into temporary storage.
         
         Args:
             parquet_path (str): Path to parquet file.
             load_percentage (float): Fraction of data to load (for testing). Defaults to 1.0.
         """
         self.logger.info(f"Loading data from {parquet_path}")
-        self.dataframe = self.parquet_handler.read_parquet(parquet_path, load_percentage)
-        self.logger.info(f"Data loaded with shape: {self.dataframe.shape}")
+        self._temp_dataframe = self.parquet_handler.read_parquet(parquet_path, load_percentage)
+        self.logger.info(f"Data loaded with shape: {self._temp_dataframe.shape}")
         
         # Log feature summary if we can categorize
         try:
@@ -247,22 +281,22 @@ class DataHandler:
         if 'match_id' in combined_df.columns:
             combined_df = combined_df.drop('match_id', axis=1)
         
-        self.dataframe = combined_df
-        self.logger.info(f"Combined dataframe shape: {self.dataframe.shape}")
-        self.logger.info(f"Total features: {self.dataframe.shape[1] - 1} (excluding target)")
+        self._temp_dataframe = combined_df
+        self.logger.info(f"Combined dataframe shape: {self._temp_dataframe.shape}")
+        self.logger.info(f"Total features: {self._temp_dataframe.shape[1] - 1} (excluding target)")
         self.logger.info(f"  - Match features: {matches_df.shape[1] - 1}")
         self.logger.info(f"  - Individual player features: {player_features_df.shape[1] - 1}")
         self.logger.info(f"  - Aggregated team features: {len(numeric_cols) * 2}")
 
     def validate_data(self) -> bool:
         """
-        Validate the loaded dataframe before processing.
+        Validate the loaded or split dataframe before processing.
         
         Checks:
-        - Dataframe is not None
+        - Data exists (either temp or split)
         - Target feature exists
         - No completely empty columns
-        - Reasonable data types
+        - No duplicate columns
         
         Returns:
             bool: True if validation passes.
@@ -270,20 +304,25 @@ class DataHandler:
         Raises:
             ValueError: If validation fails with specific error message.
         """
-        if self.dataframe is None:
+        # Get available dataframe
+        if self._temp_dataframe is not None:
+            dataframe = self._temp_dataframe
+        elif self.data_train is not None:
+            dataframe = self.get_combined_dataframe()
+        else:
             raise ValueError("No dataframe loaded. Call load_data or join_match_and_player_data first.")
         
-        if self.target_feature not in self.dataframe.columns:
+        if self.target_feature not in dataframe.columns:
             raise ValueError(f"Target feature '{self.target_feature}' not found in dataframe. "
-                           f"Available columns: {list(self.dataframe.columns)}")
+                           f"Available columns: {list(dataframe.columns)}")
         
         # Check for completely empty columns
-        empty_cols = self.dataframe.columns[self.dataframe.isnull().all()].tolist()
+        empty_cols = dataframe.columns[dataframe.isnull().all()].tolist()
         if empty_cols:
             self.logger.warning(f"Found {len(empty_cols)} completely empty columns: {empty_cols}")
         
         # Check for duplicate columns
-        duplicate_cols = self.dataframe.columns[self.dataframe.columns.duplicated()].tolist()
+        duplicate_cols = dataframe.columns[dataframe.columns.duplicated()].tolist()
         if duplicate_cols:
             raise ValueError(f"Found duplicate column names: {duplicate_cols}")
         
@@ -295,13 +334,20 @@ class DataHandler:
         Split the dataframe into training and testing sets.
         
         Validates data before splitting and separates features from target.
+        Clears temporary dataframe after splitting to free memory.
         """
         # Validate before splitting
         self.validate_data()
 
+        # Get dataframe to split
+        if self._temp_dataframe is not None:
+            dataframe = self._temp_dataframe
+        else:
+            raise ValueError("No dataframe loaded. Call load_data or join_match_and_player_data first.")
+
         self.logger.info("Splitting data into training and testing sets")
-        X = self.dataframe.drop(columns=[self.target_feature])
-        y = self.dataframe[self.target_feature]
+        X = dataframe.drop(columns=[self.target_feature])
+        y = dataframe[self.target_feature]
 
         x_train, x_test, y_train, y_test = train_test_split(
             X, y, test_size=self.test_size, random_state=self.random_state, shuffle=True
@@ -314,18 +360,21 @@ class DataHandler:
         self.data_test = x_test.reset_index(drop=True)
         self.labels_train = y_train.reset_index(drop=True)
         self.labels_test = y_test.reset_index(drop=True)
+        
+        # Clear temporary dataframe to free memory
+        self._temp_dataframe = None
 
         self.logger.info(f"Training data shape: {self.data_train.shape}")
         self.logger.info(f"Testing data shape: {self.data_test.shape}")
         self.logger.info(f"Training labels shape: {self.labels_train.shape}")
         self.logger.info(f"Testing labels shape: {self.labels_test.shape}")
 
-    def save_cleaned_data(self, output_dir: str) -> str:
+    def save_splits(self, output_dir: str) -> str:
         """
-        Save cleaned train/test data and labels as separate parquet files in a timestamped subdirectory.
+        Save train/test splits and labels as separate parquet files in a timestamped subdirectory.
 
         Args:
-            output_dir (str): Base directory path for cleaned data (e.g., 'data/cleaned/matches').
+            output_dir (str): Base directory path for saving data (e.g., 'data/cleaned/matches').
             
         Returns:
             str: Path to the created timestamped subdirectory.
@@ -349,7 +398,7 @@ class DataHandler:
         self.parquet_handler.write_parquet(self.labels_train.to_frame(), train_labels_path)
         self.parquet_handler.write_parquet(self.labels_test.to_frame(), test_labels_path)
 
-        self.logger.info(f"Cleaned data saved to {timestamped_dir}:")
+        self.logger.info(f"Data splits saved to {timestamped_dir}:")
         self.logger.info(f"  - Train data: {train_data_path}")
         self.logger.info(f"  - Test data: {test_data_path}")
         self.logger.info(f"  - Train labels: {train_labels_path}")
@@ -357,12 +406,12 @@ class DataHandler:
         
         return timestamped_dir
 
-    def load_cleaned_data(self, input_dir: str, timestamp: str = None) -> None:
+    def load_splits(self, input_dir: str, timestamp: str = None) -> None:
         """
-        Load cleaned train/test data and labels from separate parquet files in a timestamped subdirectory.
+        Load train/test data and labels from separate parquet files in a timestamped subdirectory.
 
         Args:
-            input_dir (str): Base directory path for cleaned data (e.g., 'data/cleaned/matches').
+            input_dir (str): Base directory path for saved data (e.g., 'data/cleaned/matches').
             timestamp (str): Optional timestamp subdirectory name to load specific version (e.g., '20251218_153045').
                            If None, loads from the most recent timestamped subdirectory.
         """
