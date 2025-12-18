@@ -1,5 +1,6 @@
 from data_extraction.requester import Requester
-from persistence.checkpoint import save_checkpoint, load_checkpoint
+from helpers.checkpoint import save_checkpoint, load_checkpoint
+from helpers.parquet_handler import ParquetHandler
 from data_extraction.schemas import PLAYERS_SCHEMA, MATCHES_SCHEMA
 from typing import List
 from collections import deque
@@ -35,10 +36,12 @@ class DataMiner():
     def __init__(self, 
         logger: logging.Logger,
         requester: Requester,
+        parquet_handler: ParquetHandler,
         raw_data_path: str, 
         patient_zero_game_name: str, 
         patient_zero_tag_line: str,
-        checkpoint_loading_path: str = None) -> None:
+        checkpoint_loading_path: str = None,
+        checkpoint_save_path: str = None) -> None:
         """
         Initialize DataMiner with a patient zero summoner and optional checkpoint recovery.
 
@@ -48,10 +51,11 @@ class DataMiner():
         Args:
             logger (logging.Logger): Logger instance for tracking discovery progress.
             requester (Requester): Configured Requester for API calls.
-            raw_data_path (str): Directory path for storing checkpoints and parquet output files.
+            raw_data_path (str): Directory path for storing match/player parquet output files.
             patient_zero_game_name (str): Summoner name of the starting player.
-            patient_zero_tag_line (str): Tag line of the starting player (e.g., 'NA1').
+            patient_zero_tag_line: (str): Tag line of the starting player (e.g., 'NA1').
             checkpoint_loading_path (str, optional): Path to checkpoint file for recovery. If None, starts fresh.
+            checkpoint_save_path (str, optional): Directory path for saving new checkpoints. Required to save checkpoints.
 
         Raises:
             InvalidPatientZeroError: If patient_zero summoner is not found or API returns error.
@@ -59,8 +63,10 @@ class DataMiner():
     
         self.logger = logger
         self.requester = requester
+        self.parquet_handler = parquet_handler
 
         self.raw_data_path = raw_data_path
+        self.checkpoint_save_path = checkpoint_save_path
 
         self.patient_zero_game_name = patient_zero_game_name
         self.patient_zero_tag_line = patient_zero_tag_line
@@ -167,17 +173,30 @@ class DataMiner():
             checkpoint_dict["players_queue"] = self.players_queue
             checkpoint_dict["seen_players"] = self.seen_players
             checkpoint_dict["seen_matches"] = self.seen_matches
-            test_path = os.path.join(self.raw_data_path, "pickle\\checkpoint.pkl")
-            save_checkpoint(logger=self.logger, state=checkpoint_dict, path=test_path)
 
-        players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players, mode=search_mode)
-        matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches, mode=search_mode)
+            # sufix with detailed timestamp number of players and matches
+            timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+            
+            if self.checkpoint_save_path:
+                os.makedirs(self.checkpoint_save_path, exist_ok=True)
+                checkpoint_path = os.path.join(self.checkpoint_save_path, f"{timestamp}_{len(self.seen_players)}_players_{len(self.seen_matches)}_matches.pkl")
+            else:
+                raise ValueError("checkpoint_save_path must be provided to save checkpoints")
+                
+            save_checkpoint(logger=self.logger, state=checkpoint_dict, path=checkpoint_path)
 
+        players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players, mode="players")
+        matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches, mode="matches")
 
-        player_data_path = os.path.join(self.raw_data_path, "players_puuid")
-        match_data_path = os.path.join(self.raw_data_path, "matches_id")
-        self.save_dataframe_to_parquet(dataframe=players_dataframe, path=player_data_path, mode=search_mode)
-        self.save_dataframe_to_parquet(dataframe=matches_dataframe, path=match_data_path, mode=search_mode)
+        # suffix with detailed timestamp and number of players/matches saved
+        current_date = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        player_prefix = f'{current_date}_{len(players_dataframe)}_players'
+        player_data_path = os.path.join(self.raw_data_path, f"exploration\\players\\{player_prefix}.parquet")
+        self.parquet_handler.write_parquet(data=players_dataframe, file_path=player_data_path)
+        
+        match_prefix = f'{current_date}_{len(matches_dataframe)}_matches'
+        match_data_path = os.path.join(self.raw_data_path, f"exploration\\matches\\{match_prefix}.parquet")
+        self.parquet_handler.write_parquet(data=matches_dataframe, file_path=match_data_path)
 
         end = time.time()
         self.logger.info(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
@@ -264,47 +283,4 @@ class DataMiner():
             self.logger.error(f'Error trying to create a pandas Dataframe: {e}')
             return None
         
-        return dataframe
-    
-    def save_dataframe_to_parquet(self, dataframe: pd.DataFrame, path: str, mode: str) -> None:
-        """
-        Save a DataFrame to parquet file with appropriate schema.
-
-        Creates the output directory if needed and writes the DataFrame as a timestamped parquet file 
-        using the PLAYERS_SCHEMA or MATCHES_SCHEMA based on mode.
-
-        Args:
-            dataframe (pd.DataFrame): DataFrame to save.
-            path (str): Directory path where parquet file will be written.
-            mode (str): Type of data ('players' for PLAYERS_SCHEMA or 'matches' for MATCHES_SCHEMA).
-
-        Returns:
-            None. Logs success or error messages.
-        """
-
-        if not isinstance(dataframe, pd.DataFrame):
-            self.logger.error("No dataframe provided. Unable to save dataframe to parquet.")
-            return None
-        
-        if path is None:
-            self.logger.error("No path provided. Unable to save dataframe to parquet.")
-            return None
-        
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        try:
-            filename = f"data_{int(time.time())}.parquet"
-            parquet_path = os.path.join(path, filename)
-            if mode == "players":
-                table = pa.Table.from_pandas(df=dataframe, schema=PLAYERS_SCHEMA)
-                pq.write_table(table, parquet_path)
-            else:
-                table = pa.Table.from_pandas(df=dataframe, schema=MATCHES_SCHEMA)
-                pq.write_table(table, parquet_path)
-            
-            self.logger.info(f'parquet file saved to {parquet_path}')
-
-        except Exception as e:
-            self.logger.error(f'Error saving to parquet: {e}')
-        
+        return dataframe   

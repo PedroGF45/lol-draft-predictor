@@ -1,6 +1,7 @@
 from data_extraction.requester import Requester
 from data_extraction.schemas import MATCH_SCHEMA, PLAYER_HISTORY_SCHEMA
-from persistence.checkpoint import save_checkpoint, load_checkpoint
+from helpers.parquet_handler import ParquetHandler
+from helpers.checkpoint import save_checkpoint, load_checkpoint
 
 import os
 import logging
@@ -27,24 +28,37 @@ class MatchFetcher:
         final_player_history_df_list (list): Accumulated player history records (10 per match).
     """
 
-    def __init__(self, requester: Requester, logger: logging.Logger,  dataframe_target_path: str, checkpoint_loading_path: str = None) -> None:
+    def __init__(self, 
+                 requester: Requester, 
+                 logger: logging.Logger, 
+                 parquet_handler: ParquetHandler, 
+                 dataframe_target_path: str, 
+                 checkpoint_loading_path: str = None,
+                 load_percentage: float = 1.0,
+                 random_state: int = 42) -> None:
         """
         Initialize MatchFetcher with API client, logging, and optional checkpoint recovery.
 
         Args:
             requester (Requester): Configured HTTP client for API calls.
             logger (logging.Logger): Logger instance for status/error messages.
+            parquet_handler (ParquetHandler): Handler for reading/writing parquet files.
             dataframe_target_path (str): Directory path for output parquet files.
             checkpoint_loading_path (str, optional): Path to checkpoint file for resumption. Defaults to None.
+            load_percentage (float, optional): Percentage of data to load from parquet. Defaults to 1.0.
+            random_state (int, optional): Random seed for reproducibility. Defaults to 42.
         """
         
         self.requester = requester
+        self.parquet_handler = parquet_handler
         self.logger = logger
+        self.load_percentage = load_percentage
+        self.random_state = random_state
 
         self.dataframe_target_path = dataframe_target_path
-        if not os.path.exists(dataframe_target_path):
-            logger.warning(f'Dataframe target path is not valid. Defaulting to "data/players"')
-            self.dataframe_target_path = "./data/players"
+        
+        if not self.parquet_handler.check_directory_exists(self.dataframe_target_path):
+            self.parquet_handler.create_directory(self.dataframe_target_path)
         
         # Initialize checkpoint state
         self.checkpoint_loading_path = checkpoint_loading_path
@@ -60,28 +74,7 @@ class MatchFetcher:
                 self.final_player_history_df_list = checkpoint_state.get("final_player_history_df_list", [])
                 self.logger.info(f"Resumed from checkpoint: {len(self.processed_matches)} matches already processed")
       
-    def get_dataframe_from_parquet(self, parquet_path: str) -> pd.DataFrame:
-        """
-        Load a parquet file into a pandas DataFrame.
-
-        Args:
-            parquet_path (str): Path to the parquet file.
-
-        Returns:
-            pd.DataFrame: Loaded DataFrame, or empty DataFrame if load fails.
-        """
-
-        try:
-            match_df = pd.read_parquet(parquet_path)
-            self.logger.info(f'Match data frame successfully loaded: {match_df.info()}')
-
-        except Exception as e:
-            match_df = pd.DataFrame()
-            self.logger.error(f'Error while converting a dataframe from a parque path: {e}')
-
-        return match_df
-
-    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] = [420, 440], match_limit: int = 50, checkpoint_save_interval: int = 10) -> None:
+    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] | None = None, match_limit_per_player: int = 50, checkpoint_save_interval: int = 10) -> None:
         """
         Orchestrate the enrichment pipeline: fetch match details, player state, and KPIs for all matches.
 
@@ -93,15 +86,18 @@ class MatchFetcher:
         Args:
             parquet_path (str): Path to input parquet with match_id column.
             keep_remakes (bool): If False (default), skip matches < 300 seconds.
-            queue (list[int]): List of queue IDs to include (default: [420=Ranked Solo, 440=Ranked Flex]).
-            match_limit (int): Number of prior matches per player to fetch for KPI aggregation (default: 50).
+            queue (list[int] | None): Queue IDs to include. Defaults to [420, 440] if None.
+            match_limit_per_player (int): Number of prior matches per player to fetch for KPI aggregation (default: 50).
             checkpoint_save_interval (int): Save checkpoint every N matches processed (default: 10).
         """
+
+        if queue is None:
+            queue = [420, 440]
 
         if not os.path.exists(parquet_path):
             self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
         
-        match_df = self.get_dataframe_from_parquet(parquet_path=parquet_path)
+        match_df = self.parquet_handler.read_parquet(file_path=parquet_path, load_percentage=self.load_percentage)
 
         # Add progress bar for match processing
         total_matches = len(match_df)
@@ -155,9 +151,9 @@ class MatchFetcher:
             rank_queue_data = self.fetch_rank_queue_data(participants=participants)
             self.logger.debug(f'Rank Queue Data: {rank_queue_data}')
 
-            # get raw kpis for each participant on last 100 matches before this match
+            # get raw kpis for each participant on last N matches before this match
             current_match_timestamp_creation = match_pre_features.get("game_creation")
-            kpis_data = self.fetch_raw_player_kpis(participants=participants, match_limit=match_limit, before_timestamp=current_match_timestamp_creation)
+            kpis_data = self.fetch_raw_player_kpis(participants=participants, match_limit_per_player=match_limit_per_player, before_timestamp=current_match_timestamp_creation)
             self.logger.debug(f'KPIs Data: {kpis_data}')
 
             # create match record with match schema
@@ -194,27 +190,28 @@ class MatchFetcher:
         final_match_df = pd.DataFrame(self.final_match_df_list)
         final_player_history_df = pd.DataFrame(self.final_player_history_df_list)
 
-        self.logger.info(f'Final Dataframe Info: {final_match_df.info()}')
         self.logger.info(f'Final Dataframe Head: {final_match_df.head()}')
         self.logger.info(f'Final Dataframde description: {final_match_df.describe()}')
 
-        self.logger.info(f'Final Player History Dataframe Info: {final_player_history_df.info()}')
         self.logger.info(f'Final Player History Dataframe Head: {final_player_history_df.head()}')
         self.logger.info(f'Final Player History Dataframde description: {final_player_history_df.describe()}')
         
-        # save final dataframe to parquet
-        match_output_path = os.path.join(self.dataframe_target_path, 'matches.parquet')
-        final_match_df.to_parquet(match_output_path, index=False)
+        # suffix with detailed timestamp, number of matches saved, number of matches_per_player
+        current_date = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        match_path_sufix = f'{current_date}_{len(final_match_df)}_matches_{match_limit_per_player}_players_per_match'
+        match_output_path = os.path.join(self.dataframe_target_path, "matches", f'{match_path_sufix}.parquet')
+        self.parquet_handler.write_parquet(data=final_match_df, file_path=match_output_path)
         self.logger.info(f'Match Dataframe saved to {match_output_path}')
-        player_history_output_path = os.path.join(self.dataframe_target_path, 'player_history.parquet')
-        final_player_history_df.to_parquet(player_history_output_path, index=False)
+
+        player_history_output_path = os.path.join(self.dataframe_target_path, "players", f'{match_path_sufix}.parquet')
+        self.parquet_handler.write_parquet(data=final_player_history_df, file_path=player_history_output_path)
         self.logger.info(f'Player History Dataframe saved to {player_history_output_path}')
         
         # Clear checkpoint after successful completion
         if self.checkpoint_loading_path and os.path.exists(self.checkpoint_loading_path):
             try:
                 os.remove(self.checkpoint_loading_path)
-                self.logger.info(f'Checkpoint cleared after successful completion')
+                self.logger.info('Checkpoint cleared after successful completion')
             except Exception as e:
                 self.logger.warning(f'Failed to clear checkpoint: {e}')
 
@@ -227,13 +224,27 @@ class MatchFetcher:
         if not self.checkpoint_loading_path:
             self.logger.warning('Checkpoint loading path not set; skipping checkpoint save.')
             return
-        
+
+        checkpoint_dir = (
+            os.path.dirname(self.checkpoint_loading_path)
+            if os.path.splitext(self.checkpoint_loading_path)[1]
+            else self.checkpoint_loading_path
+        )
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        checkpoint_filename = f"{timestamp}_{len(self.processed_matches)}_matches_checkpoint.pkl"
+        checkpoint_path = os.path.join(checkpoint_dir, checkpoint_filename)
+
         checkpoint_state = {
             "processed_matches": self.processed_matches,
             "final_match_df_list": self.final_match_df_list,
             "final_player_history_df_list": self.final_player_history_df_list
         }
-        save_checkpoint(logger=self.logger, state=checkpoint_state, path=self.checkpoint_loading_path)
+        save_checkpoint(logger=self.logger, state=checkpoint_state, path=checkpoint_path)
+
+        # Keep latest path for cleanup
+        self.checkpoint_loading_path = checkpoint_path
 
     def fetch_match_pre_features(self, match_id: str) -> dict[str, Any]:
         """
@@ -249,6 +260,11 @@ class MatchFetcher:
         
         match_details_endpoint = f'/lol/match/v5/matches/{match_id}'
         match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
+
+        # Guard against invalid or missing match details
+        if not isinstance(match_details, dict) or not match_details.get("metadata") or not match_details.get("info"):
+            self.logger.info(f'Skipping match {match_id} due to invalid match details response')
+            return None
 
         data_version = match_details.get("metadata").get("dataVersion") # version of the data schema
         game_creation = match_details.get("info").get("gameCreation") # timestamp of game creation
@@ -446,16 +462,16 @@ class MatchFetcher:
 
         return rank_queue_data
     
-    def fetch_raw_player_kpis(self, participants: list[str], match_limit: int = 50, before_timestamp: int = None) -> dict[str, Any]:
+    def fetch_raw_player_kpis(self, participants: list[str], match_limit_per_player: int = 50, before_timestamp: int = None) -> dict[str, Any]:
         """
         Fetch raw KPI data from the last N matches for each participant, filtered by timestamp.
 
-        For each participant, retrieves their last `match_limit` match IDs before `before_timestamp`, 
+        For each participant, retrieves their last `match_limit_per_player` match IDs before `before_timestamp`, 
         then fetches detailed stats (kills, deaths, CS, gold, damage, etc.) from each match.
 
         Args:
             participants (list[str]): List of player PUUIDs.
-            match_limit (int): Number of prior matches to fetch per player (default: 50).
+            match_limit_per_player (int): Number of prior matches to fetch per player (default: 50).
             before_timestamp (int, optional): Unix timestamp to filter matches (only matches before this time). 
 
         Returns:
@@ -463,7 +479,7 @@ class MatchFetcher:
         """
         kpis_data = {}
         for puuid in participants:
-            kpis_endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit}'
+            kpis_endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit_per_player}'
             if before_timestamp:
                 kpis_endpoint += f'&endTime={before_timestamp}'
             kpis_match_ids = self.requester.make_request(is_v5=True, endpoint_url=kpis_endpoint)
@@ -668,23 +684,86 @@ class MatchFetcher:
             'ranked_rank': rank_queue_data.get(puuid + "_solo", {}).get("rank") if rank_queue_data.get(puuid + "_solo") else None,
             'ranked_league_points': rank_queue_data.get(puuid + "_solo", {}).get("leaguePoints") if rank_queue_data.get(puuid + "_solo") else None,
 
-            # kpis
-            'win_rate': self._calculate_win_rate(kpis_data),
+            # pings
+            'all_in_pings': self._calculate_average(kpis_data, 'allInPings'),
+            'assist_me_pings': self._calculate_average(kpis_data, 'assistmePings'),
+            'command_pings': self._calculate_average(kpis_data, 'commandPings'),
+            'enemy_missing_pings': self._calculate_average(kpis_data, 'enemyMissingPings'),
+            'enemy_vision_pings': self._calculate_average(kpis_data, 'enemyVisionPings'),
+            'hold_pings': self._calculate_average(kpis_data, 'holdPings'),
+            'get_back_pings': self._calculate_average(kpis_data, 'getbackPings'),
+            'need_vision_pings': self._calculate_average(kpis_data, 'needVisionPings'),
+            'on_my_way_pings': self._calculate_average(kpis_data, 'onMyWayPings'),
+            'push_pings': self._calculate_average(kpis_data, 'pushPings'),
+            'vision_cleared_pings': self._calculate_average(kpis_data, 'visionClearedPings'),
+
+            # wards
+            'average_wards_placed': self._calculate_average(kpis_data, 'wardsPlaced'),
+            'average_ward_kills': self._calculate_average(kpis_data, 'wardKills'),
+            'average_sight_wards_bought': self._calculate_average(kpis_data, 'sightWardsBoughtInGame'),
+            'average_detector_wards_placed': self._calculate_average(kpis_data, 'detectorWardsPlaced'),
+
+            # kill streaks
+            'average_killing_sprees': self._calculate_average(kpis_data, 'killingSprees'),
+            'average_largest_killing_spree': self._calculate_average(kpis_data, 'largeKillingSpree'),
+            'average_largest_multi_kill': self._calculate_average(kpis_data, 'largestMultiKill'),
+            'average_double_kills': self._calculate_average(kpis_data, 'doubleKills'),
+            'average_triple_kills': self._calculate_average(kpis_data, 'tripleKills'),
+            'average_quadra_kills': self._calculate_average(kpis_data, 'quadraKills'),
+            'average_penta_kills': self._calculate_average(kpis_data, 'pentakills'),
+
+            # objectives
+            'average_baron_kills': self._calculate_average(kpis_data, 'baronKills'),
+            'average_dragon_kills': self._calculate_average(kpis_data, 'dragonKills'),
+            'average_inhibitor_kills': self._calculate_average(kpis_data, 'inhibitorKills'),
+            'average_inhibitor_takedowns': self._calculate_average(kpis_data, 'inhibitorTakedowns'),
+            'average_inhibitors_lost': self._calculate_average(kpis_data, 'inhibitorsLost'),
+            'average_turret_kills': self._calculate_average(kpis_data, 'turretKills'),
+            'average_turret_takedowns': self._calculate_average(kpis_data, 'turretTakedowns'),
+            'average_turrets_lost': self._calculate_average(kpis_data, 'turretsLost'),
+            'average_objectives_stolen': self._calculate_average(kpis_data, 'objectivesStolen'),
+            'average_objectives_stolen_assists': self._calculate_average(kpis_data, 'objectivesStolenAssists'),
+
+            # damage stats
+            'average_total_damage_dealt_to_champions': self._calculate_average(kpis_data, 'totalDamageDealtToChampions'),
+            'average_physical_damage_dealt_to_champions': self._calculate_average(kpis_data, 'physicalDamageDealtToChampions'),
+            'average_magic_damage_dealt_to_champions': self._calculate_average(kpis_data, 'magicDamageDealtToChampions'),
+            'average_true_damage_dealt_to_champions': self._calculate_average(kpis_data, 'trueDamageDealtToChampions'),
+            'average_total_damage_taken': self._calculate_average(kpis_data, 'totalDamageTaken'),
+            'average_damage_self_mitigated': self._calculate_average(kpis_data, 'damageSelfMitigated'),
+            'average_total_heal': self._calculate_average(kpis_data, 'totalHeal'),
+            'average_total_heals_on_teammates': self._calculate_average(kpis_data, 'totalHealsOnTeammates'),
+
+            # combat stats
             'average_kills': self._calculate_average(kpis_data, 'kills'),
             'average_deaths': self._calculate_average(kpis_data, 'deaths'),
             'average_assists': self._calculate_average(kpis_data, 'assists'),
-            'average_cs': self._calculate_average(kpis_data, 'totalMinionsKilled'),
-            'average_gold_earned': self._calculate_average(kpis_data, 'goldEarned'),
-            'average_damage_dealt': self._calculate_average(kpis_data, 'totalDamageDealtToChampions'),
-            'average_damage_taken': self._calculate_average(kpis_data, 'totalDamageTaken'),
-            'average_vision_score': self._calculate_average(kpis_data, 'visionScore'),
-            'average_healing_done': self._calculate_average(kpis_data, 'totalHeal'),
             'kda_ratio': self._calculate_kda_ratio(kpis_data),
-            'cs_per_minute': self._calculate_per_minute(kpis_data, 'totalMinionsKilled'),
-            'gold_per_minute': self._calculate_per_minute(kpis_data, 'goldEarned'),
-            'damage_per_minute': self._calculate_per_minute(kpis_data, 'totalDamageDealtToChampions'),
-            'vision_score_per_minute': self._calculate_per_minute(kpis_data, 'visionScore'),
-            'healing_per_minute': self._calculate_per_minute(kpis_data, 'totalHeal')
+            'win_rate': self._calculate_win_rate(kpis_data),
+            'average_cs_per_minute': self._calculate_per_minute(kpis_data, 'totalMinionsKilled'),
+            'average_kills_per_minute': self._calculate_per_minute(kpis_data, 'kills'),
+            'average_deaths_per_minute': self._calculate_per_minute(kpis_data, 'deaths'),
+            'average_assists_per_minute': self._calculate_per_minute(kpis_data, 'assists'),
+
+            # cs
+            'average_total_minions_killed': self._calculate_average(kpis_data, 'totalMinionsKilled'),
+            'average_neutral_minions_killed': self._calculate_average(kpis_data, 'neutralMinionsKilled'),
+
+            # gold
+            'average_gold_earned': self._calculate_average(kpis_data, 'goldEarned'),
+            'average_gold_spent': self._calculate_average(kpis_data, 'goldSpent'),
+            'average_items_purchased': self._calculate_average(kpis_data, 'itemsPurchased'),
+
+            # cc
+            'average_time_ccing_others': self._calculate_average(kpis_data, 'timeCCingOthers'),
+            'average_total_time_cc_dealt': self._calculate_average(kpis_data, 'totalTimeCCDealt'),
+
+            # survival
+            'average_longest_time_spent_living': self._calculate_average(kpis_data, 'longestTimeSpentLiving'),
+            'average_total_time_spent_dead': self._calculate_average(kpis_data, 'totalTimeSpentDead'),
+
+            # others
+            'average_vision_score': self._calculate_average(kpis_data, 'visionScore')
         }
 
         return player_history_record
@@ -717,8 +796,21 @@ class MatchFetcher:
         """
         if not kpis_data:
             return 0.0
-        total = sum(kpis.get(key, 0) for kpis in kpis_data)
+
+        total = sum(self._safe_number(kpis.get(key)) for kpis in kpis_data)
         return total / len(kpis_data)
+    
+    def _safe_number(self, value: Any) -> float:
+        """
+        Convert a value to float if numeric; otherwise return 0.0.
+
+        Args:
+            value (Any): Potentially numeric value.
+
+        Returns:
+            float: Numeric value or 0.0 for None/non-numeric inputs.
+        """
+        return value if isinstance(value, (int, float)) else 0.0
     
     def _calculate_kda_ratio(self, kpis_data: list[dict[str, Any]]) -> float:
         """
@@ -732,9 +824,9 @@ class MatchFetcher:
         """
         if not kpis_data:
             return 0.0
-        total_kills = sum(kpis.get("kills", 0) for kpis in kpis_data)
-        total_assists = sum(kpis.get("assists", 0) for kpis in kpis_data)
-        total_deaths = sum(kpis.get("deaths", 0) for kpis in kpis_data)
+        total_kills = sum((kpis.get("kills") or 0) for kpis in kpis_data)
+        total_assists = sum((kpis.get("assists") or 0) for kpis in kpis_data)
+        total_deaths = sum((kpis.get("deaths") or 0) for kpis in kpis_data)
         if total_deaths == 0:
             return total_kills + total_assists
         return (total_kills + total_assists) / total_deaths
@@ -752,8 +844,8 @@ class MatchFetcher:
         """
         if not kpis_data:
             return 0.0
-        total = sum(kpis.get(key, 0) for kpis in kpis_data)
-        total_minutes = sum(kpis.get("gameDuration", 0) / 60 for kpis in kpis_data)
+        total = sum((kpis.get(key) or 0) for kpis in kpis_data)
+        total_minutes = sum(((kpis.get("gameDuration") or 0) / 60) for kpis in kpis_data)
         if total_minutes == 0:
             return 0.0
         return total / total_minutes

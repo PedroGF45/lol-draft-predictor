@@ -1,13 +1,23 @@
+"""
+Arrow schema definitions for parquet outputs.
+
+The schemas are consumed by writers to enforce stable column order/types for match,
+player history, and discovery outputs.
+"""
+
 import pyarrow as pa
 
+# Player PUUID discovery output
 PLAYERS_SCHEMA = pa.schema([
     ('puuid', pa.string())
 ])
 
+# Match ID discovery output
 MATCHES_SCHEMA = pa.schema([
     ('match_id', pa.string())
 ])
 
+# Enriched match-level dataset (bans/picks + metadata)
 MATCH_SCHEMA = pa.schema([
     ('match_id', pa.string()),
     ('queue_id', pa.int32()),
@@ -38,6 +48,7 @@ MATCH_SCHEMA = pa.schema([
     ('team2_pick_support', pa.int32())
 ])
 
+# Player-level history dataset (state + aggregated KPIs)
 PLAYER_HISTORY_SCHEMA = pa.schema([
     ('match_id', pa.string()),
     ('puuid', pa.string()),
