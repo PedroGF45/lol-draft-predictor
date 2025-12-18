@@ -32,7 +32,7 @@ class DataVisualizer:
     def perform_eda(self,
                     data_input_path: str,
                     data_output_path: str,
-                    mode: str,
+                    target_column: str = "team1_win",
                     plots: list = ["summary_statistics", "correlation_heatmap", "histogram", "violin", "scatter", "all_distributions", "skewness", "kurtosis", "feature_importance"],
                     prefix: str = "data",
                     figsize: tuple = (10, 8),
@@ -42,7 +42,8 @@ class DataVisualizer:
                     sample_size: int = 10000,
                     dpi: int = 100,
                     n_estimators: int = 5,
-                    n_repeats: int = 2
+                    n_repeats: int = 2,
+                    is_classification: bool = True
                     ) -> None:
         """
         Perform selected exploratory data analysis (EDA) visualizations.
@@ -53,6 +54,8 @@ class DataVisualizer:
         Args:
             data_input_path (str): Path to the input parquet data file.
             data_output_path (str): Directory path to save the output plots.
+            target_column (str): Name of the target column for supervised learning analysis. 
+                Defaults to "team1_win".
             plots (list): List of plot types to generate. Options: "summary_statistics",
                 "correlation_heatmap", "histogram", "violin", "scatter", "all_distributions",
                 "skewness", "kurtosis", "feature_importance". Defaults to all plots.
@@ -63,21 +66,17 @@ class DataVisualizer:
             fmt (str): String formatting code to use when annot is True for the heatmap. Defaults to ".2f".
             sample_size (int): Maximum number of samples to use for performance optimization. Defaults to 10000.
             dpi (int): Dots per inch for the saved images. Defaults to 100.
-            n_estimators (int): Number of trees for RandomForestRegressor. Defaults to 5.
+            n_estimators (int): Number of trees for RandomForest model. Defaults to 5.
             n_repeats (int): Number of times to permute a feature for importance analysis. Defaults to 2.
+            is_classification (bool): Whether the target is classification (True) or regression (False). 
+                Defaults to True.
         """
 
-        if mode not in ["matches", "players"]:
-            self.logger.error(f"Invalid mode '{mode}'. Choose either 'matches' or 'players'.")
-            return
-
-        # Branch output path based on mode, similar to parquet cleaning pipeline
-        if mode == "matches":
-            data_output_path = os.path.join(data_output_path, "matches")
-        else:
-            data_output_path = os.path.join(data_output_path, "players")
-
         data = self.parquet_handler.read_parquet(file_path=data_input_path, load_percentage=1.0)
+
+        if target_column not in data.columns:
+            self.logger.error(f"Target column '{target_column}' not found in the data.")
+            return
 
         if self.parquet_handler.check_directory_exists(data_output_path) is False:
             os.makedirs(data_output_path, exist_ok=True)
@@ -87,18 +86,11 @@ class DataVisualizer:
         prefix = f"{timestamp}_{prefix}"
 
         numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
-
-        if mode == "matches" and "team1_win" not in data.columns:
-            self.logger.error("Target column 'team1_win' not found in the data for matches mode.")
-            return
         
-        if mode == "players" and "win_rate" not in data.columns:
-            self.logger.error("Target column 'win_rate' not found in the data for players mode.")
-            return
-        
-        # remove win_rate from numeric_cols to avoid leakage
-        if mode == "players" and "win_rate" in numeric_cols:
-            numeric_cols.remove("win_rate")
+        # Remove target column from numeric columns to avoid including it in correlation/plots
+        if target_column in numeric_cols:
+            numeric_cols.remove(target_column)
+            self.logger.info(f"Target column '{target_column}' excluded from feature visualizations.")
 
         if "summary_statistics" in plots:
             self.create_summary_statistics_to_csv(data[numeric_cols], 
@@ -157,10 +149,6 @@ class DataVisualizer:
                               sample_size=sample_size)
             
         if "feature_importance" in plots:
-            if mode == "matches":
-                target_column = "team1_win"
-            else:
-                target_column = "win_rate"
             self.analyze_feature_importance(data=data, 
                                         target_column=target_column,
                                         numeric_columns=numeric_cols, 
@@ -168,7 +156,7 @@ class DataVisualizer:
                                         n_estimators=n_estimators, 
                                         n_repeats=n_repeats,
                                         sample_size=sample_size,
-                                        mode=mode)
+                                        is_classification=is_classification)
 
     def create_summary_statistics_to_csv(self, data: pd.DataFrame, output_path: str, sample_size: int = 10000) -> None:
         """
@@ -365,7 +353,7 @@ class DataVisualizer:
         self.logger.info(f"Kurtosis values saved to {output_path}")
 
 
-    def analyze_feature_importance(self, data: pd.DataFrame, target_column: str, numeric_columns: list[str], output_path: str, n_estimators: int = 100, n_repeats: int = 5, sample_size: int = 10000, mode: str = "matches") -> None:
+    def analyze_feature_importance(self, data: pd.DataFrame, target_column: str, numeric_columns: list[str], output_path: str, n_estimators: int = 100, n_repeats: int = 5, sample_size: int = 10000, is_classification: bool = True) -> None:
         """
         Analyze and save feature importance using permutation importance.
 
@@ -374,19 +362,20 @@ class DataVisualizer:
             target_column (str): Target column name.
             numeric_columns (list[str]): List of numeric column names.
             output_path (str): Path to save the feature importance plot.
-            n_estimators (int): Number of trees for RandomForestRegressor. Defaults to 100.
+            n_estimators (int): Number of trees for RandomForest model. Defaults to 100.
             n_repeats (int): Number of times to permute a feature. Defaults to 5.
             sample_size (int): Maximum number of samples to use. Defaults to 10000.
+            is_classification (bool): Whether to use classifier (True) or regressor (False). Defaults to True.
         """
         sampled_data = data.sample(n=min(sample_size, len(data)), random_state=self.random_state)
 
         X = sampled_data.drop(columns=[target_column])[numeric_columns]
         y = sampled_data[target_column]
 
-        if mode == "players":
-            model = RandomForestRegressor(n_estimators=n_estimators, random_state=self.random_state)
-        else:
+        if is_classification:
             model = RandomForestClassifier(n_estimators=n_estimators, random_state=self.random_state, class_weight='balanced')
+        else:
+            model = RandomForestRegressor(n_estimators=n_estimators, random_state=self.random_state)
         
         model.fit(X, y)
 
