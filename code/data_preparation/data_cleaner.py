@@ -1,4 +1,5 @@
 from data_extraction.requester import Requester
+from data_preparation.data_handler import DataHandler
 from helpers.parquet_handler import ParquetHandler
 from helpers.champion_ids import fetch_latest_champion_ids
 
@@ -20,7 +21,7 @@ class DataCleaner:
         random_state (int): Seed for deterministic sampling.
     """
 
-    def __init__(self, requester: Requester, logger: Logger, parquet_handler: ParquetHandler, load_percentage: float = 1.0, random_state: int = 42) -> None:
+    def __init__(self, requester: Requester, logger: Logger, data_handler: DataHandler, parquet_handler: ParquetHandler, load_percentage: float = 1.0, random_state: int = 42) -> None:
         """
         Initialize the cleaner with IO helpers and sampling options.
 
@@ -33,53 +34,70 @@ class DataCleaner:
         """
         self.requester = requester
         self.logger = logger
+        self.data_handler = data_handler
         self.parquet_handler = parquet_handler
         self.load_percentage = load_percentage
         self.random_state = random_state
 
-    def clean_data(self, raw_data_path: str, cleaned_data_path: str, mode: str) -> None:
+    def clean_data(self, output_path: str = None) -> None:
         """
         Run the full cleaning pipeline for match or player data.
 
         Args:
-            raw_data_path (str): Path to the raw parquet input.
-            cleaned_data_path (str): Destination path for cleaned parquet.
-            mode (str): 'matches' to clean match data or 'players' for player history data.
-
-        Raises:
-            ValueError: If mode is not 'matches' or 'players'.
+            output_path (str, optional): Directory to save cleaned data. If None, data is not saved.
         """
 
-        if mode not in {"matches", "players"}:
-            raise ValueError("mode must be either 'matches' or 'players'")
-
-        self.logger.info(f"Starting data cleaning from {raw_data_path} to {cleaned_data_path}")
+        self.logger.info("Starting data cleaning")
         
-        raw_data = self.parquet_handler.read_parquet(raw_data_path, load_percentage=self.load_percentage)
+        # validate data integrity before processing
+        try:
+            self.data_handler.validate_data()
+            self.logger.info("Pre-cleaning validation passed")
+        except ValueError as e:
+            self.logger.error(f"Pre-cleaning validation failed: {e}")
+            raise
         
         # remove duplicates
-        cleaned_data_without_duplicates = self._remove_duplicates(raw_data)
+        self._remove_duplicates()
+
+        # identify feature types for downstream processing
+        self._update_feature_types()
 
         # handle missing values
-        cleaned_data_without_missing = self._handle_missing_values(cleaned_data_without_duplicates)
-        
+        self._handle_missing_values()
         
         # handle out of range values
-        if mode == "matches":
-            cleaned_data_without_missing = self._handle_matches_out_of_range_values(cleaned_data_without_missing)
-        else:  # mode == "players"
-            cleaned_data_without_missing = self._handle_players_out_of_range_values(cleaned_data_without_missing)
+        self._handle_out_of_range_values()
+
+        # refresh feature type sets after all cleaning steps
+        self._update_feature_types()
+
+        # log feature summary
+        feature_summary = self.data_handler.get_feature_summary()
+        self.logger.info(f"Cleaning completed. Feature summary: {feature_summary}")
+
+        # save cleaned data if output path is provided
+        if output_path:
+            self.data_handler.save_cleaned_data(output_path)
+            self.logger.info(f"Cleaned data saved to {output_path}")
 
         self.logger.info("Data cleaning completed.")
 
-        parquet_file_name = os.path.basename(raw_data_path)
-        if mode == "matches":
-            cleaned_data_path = os.path.join(cleaned_data_path, "clean", "matches", parquet_file_name)
-        else:
-            cleaned_data_path = os.path.join(cleaned_data_path, "clean", "players", parquet_file_name)
-        self.parquet_handler.write_parquet(cleaned_data_without_missing, cleaned_data_path)
 
-    def _remove_duplicates(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _remove_unwanted_columns(self, columns_to_remove: list) -> None:
+        
+        try:
+            self.logger.info("Removing unwanted columns.")
+            data_train = self.data_handler.get_data_train()
+            data_train_dropped = data_train.drop(columns=columns_to_remove, errors='ignore')
+            self.data_handler.set_data_train(data_train_dropped)
+
+        except Exception as e:
+            self.logger.error(f"Error removing unwanted columns: {e}")
+            raise e
+
+
+    def _remove_duplicates(self) -> None:
         """
         Drop duplicate rows and log how many were removed.
 
@@ -90,184 +108,256 @@ class DataCleaner:
             pd.DataFrame: Dataframe without duplicate rows.
         """
         self.logger.info("Removing duplicate records.")
-        initial_count = len(data)
-        cleaned_data = data.drop_duplicates()
-        final_count = len(cleaned_data)
+        initial_count = len(self.data_handler.get_data_train())
+
+        data_train_without_duplicates = self.data_handler.get_data_train().drop_duplicates()
+        self.data_handler.set_data_train(data_train_without_duplicates)
+
+        labels_train_without_duplicates = self.data_handler.get_labels_train().loc[data_train_without_duplicates.index]
+        self.data_handler.set_labels_train(labels_train_without_duplicates)
+
+        final_count = len(data_train_without_duplicates)
         self.logger.info(f"Removed {initial_count - final_count} duplicate records.")
-        return cleaned_data
     
-    def _handle_missing_values(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _handle_missing_values(self, strategy: str = "drop") -> None:
         """
-        Remove rows containing any missing values.
+        Handle missing values using the specified strategy.
 
         Args:
-            data (pd.DataFrame): Input dataframe.
+            strategy (str): Strategy for handling missing values.
+                - 'drop': Remove rows with any missing values
+                - 'mean': Fill numerical with mean, categorical with mode
+                - 'median': Fill numerical with median, categorical with mode
+                - 'mode': Fill all columns with mode
 
-        Returns:
-            pd.DataFrame: Dataframe with missing-value rows dropped.
+        Raises:
+            ValueError: If strategy is not recognized.
         """
-        self.logger.info("Handling missing values.")
-        initial_count = len(data)
-        cleaned_data = data.dropna()
-        final_count = len(cleaned_data)
-        self.logger.info(f"Removed {initial_count - final_count} records with missing values.")
-        return cleaned_data
+        valid_strategies = {"drop", "mean", "median", "mode"}
+        if strategy not in valid_strategies:
+            raise ValueError(f"strategy must be one of {valid_strategies}")
 
-    def _handle_matches_out_of_range_values(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Filter match records using queue, duration, boolean, and champion ID validity checks.
-
-        Args:
-            data (pd.DataFrame): Match dataframe to validate.
-
-        Returns:
-            pd.DataFrame: Filtered dataframe containing only valid match rows.
-        """
-
-        self.logger.info("Handling out-of-range values for match data.")
-        initial_count = len(data)
-
-        # queue_id should be in a predefined set
-        valid_queue_ids = {400, 420, 430, 440, 450}
-        valid_data = data[data['queue_id'].isin(valid_queue_ids)]
-
-        # game_duration should be positive and less than 2 hours (7200 seconds)
-        valid_data = valid_data[(valid_data['game_duration'] > 0) & (valid_data['game_duration'] < 7200)]
-
-        # team1_win should be boolean
-        valid_data = valid_data[valid_data['team1_win'].apply(lambda x: isinstance(x, bool))]
-
-        # bans and picks should be non-negative integers and valid champion ids
-        champion_id_columns = [
-            'team1_ban1', 'team1_ban2', 'team1_ban3', 'team1_ban4', 'team1_ban5',
-            'team2_ban1', 'team2_ban2', 'team2_ban3', 'team2_ban4', 'team2_ban5',
-            'team1_pick_top', 'team1_pick_jungle', 'team1_pick_mid', 'team1_pick_adc', 'team1_pick_support',
-            'team2_pick_top', 'team2_pick_jungle', 'team2_pick_mid', 'team2_pick_adc', 'team2_pick_support'
-        ]
-
-        valid_champion_ids = fetch_latest_champion_ids()
-
-        for col in champion_id_columns:
-            valid_data = valid_data[valid_data[col].isin(valid_champion_ids)]
-
-        final_count = len(valid_data)
-        self.logger.info(f"Removed {initial_count - final_count} records with out-of-range values.")
-        return valid_data
-
-
-    def _handle_players_out_of_range_values(self, data: pd.DataFrame) -> pd.DataFrame:
-        """
-        Apply validation rules to player history rows (IDs, roles, tiers, and numeric ranges).
-
-        Args:
-            data (pd.DataFrame): Player history dataframe to validate.
-
-        Returns:
-            pd.DataFrame: Filtered dataframe with invalid rows removed.
-        """
+        self.logger.info(f"Handling missing values using '{strategy}' strategy.")
         
-        self.logger.info("Handling out-of-range values for player history data.")
-        initial_count = len(data)
-
-        # puuid should be strings of length 78
-        valid_data = data[data['puuid'].apply(lambda x: isinstance(x, str) and len(x) == 78)]
-        valid_data['puuid'] = valid_data['puuid'].astype(str)
-        puuid_removed = initial_count - len(valid_data)
-        self.logger.info(f"Removed {puuid_removed} records with invalid puuid.")
-
-        # team_id should be either 100 or 200
-        valid_data = valid_data[valid_data['team_id'].isin([100, 200])]
-        valid_data['team_id'] = valid_data['team_id'].astype(int)
-        team_id_removed = initial_count - puuid_removed - len(valid_data)
-        self.logger.info(f"Removed {team_id_removed} records with invalid team_id.")
-
-        # role should be one of predefined roles
-        valid_roles = {"TOP", "JUNGLE", "MID", "BOTTOM", "UTILITY"}
-        valid_data = valid_data[valid_data['role'].isin(valid_roles)]
-        valid_data['role'] = valid_data['role'].astype(str)
-        role_removed = initial_count - puuid_removed - team_id_removed - len(valid_data)
-        self.logger.info(f"Removed {role_removed} records with invalid role.")
-
-        # champion_id should be valid champion ids
-        valid_champion_ids = fetch_latest_champion_ids()
-        valid_data = valid_data[valid_data['champion_id'].isin(valid_champion_ids)]
-        valid_data['champion_id'] = valid_data['champion_id'].astype(int)
-        champion_id_removed = initial_count - puuid_removed - team_id_removed - role_removed - len(valid_data)
-        self.logger.info(f"Removed {champion_id_removed} records with invalid champion_id.")
-
-        # summoner_level should be positive integers
-        valid_data = valid_data[valid_data['summoner_level'].apply(lambda x: isinstance(x, int) and x > 0)]
-        valid_data['summoner_level'] = valid_data['summoner_level'].astype(int)
-        summoner_level_removed = initial_count - puuid_removed - team_id_removed - role_removed - champion_id_removed - len(valid_data)
-        self.logger.info(f"Removed {summoner_level_removed} records with invalid summoner_level.")
-
-        # champion_mastery_level should be non-negative integers
-        valid_data = valid_data[valid_data['champion_mastery_level'].apply(lambda x: isinstance(x, int) and x >= 0)]
-        valid_data['champion_mastery_level'] = valid_data['champion_mastery_level'].astype(int)
-        champion_mastery_level_removed = initial_count  - puuid_removed - team_id_removed - role_removed - champion_id_removed - summoner_level_removed - len(valid_data)
-        self.logger.info(f"Removed {champion_mastery_level_removed} records with invalid champion.")
-
-        # champion_total_mastery_score should be non-negative integers
-        valid_data = valid_data[valid_data['champion_total_mastery_score'].apply(lambda x: isinstance(x, int) and x >= 0)]
-        valid_data['champion_total_mastery_score'] = valid_data['champion_total_mastery_score'].astype(int)
-        champion_total_mastery_score_removed = initial_count - puuid_removed - team_id_removed - role_removed - champion_id_removed - summoner_level_removed - champion_mastery_level_removed - len(valid_data)
-        self.logger.info(f"Removed {champion_total_mastery_score_removed} records with invalid champion_total_mastery_score.")
+        if self.data_handler.get_data_train().isnull().sum().sum() == 0 and self.data_handler.get_data_test().isnull().sum().sum() == 0:
+            self.logger.info("No missing values found.")
+            return
         
-        # ranked_tier should be one of predefined tiers
-        valid_tiers = {"IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER", "GRANDMASTER", "CHALLENGER"}
-        valid_data = valid_data[valid_data['ranked_tier'].isin(valid_tiers)]
-        valid_data['ranked_tier'] = valid_data['ranked_tier'].astype(str)
-        ranked_tier_removed = initial_count - puuid_removed - team_id_removed - role_removed - champion_id_removed - summoner_level_removed - champion_mastery_level_removed - champion_total_mastery_score_removed - len(valid_data)
-        self.logger.info(f"Removed {ranked_tier_removed} records with invalid ranked_tier.")
+        initial_train_count = len(self.data_handler.get_data_train())
+        initial_test_count = len(self.data_handler.get_data_test())
 
-        # ranked_rank should be one of predefined ranks
+        if strategy == "drop":
+            data_train_without_missing = self.data_handler.get_data_train().dropna()
+            self.data_handler.set_data_train(data_train_without_missing)
+
+            data_test_without_missing = self.data_handler.get_data_test().dropna()
+            self.data_handler.set_data_test(data_test_without_missing)
+
+            labels_train_without_missing = self.data_handler.get_labels_train().loc[data_train_without_missing.index]
+            self.data_handler.set_labels_train(labels_train_without_missing)
+
+            labels_test_without_missing = self.data_handler.get_labels_test().loc[data_test_without_missing.index]
+            self.data_handler.set_labels_test(labels_test_without_missing)
+
+            final_train_count = len(data_train_without_missing)
+            final_test_count = len(data_test_without_missing)
+            self.logger.info(f"Dropped {initial_train_count - final_train_count} training and {initial_test_count - final_test_count} testing records with missing values.")
+
+        elif strategy == "mean":
+            data_train = self.data_handler.get_data_train().copy()
+            data_test = self.data_handler.get_data_test().copy()
+
+            for column in self.data_handler.get_numerical_features():
+                mean_value = data_train[column].mean()
+                data_train[column].fillna(mean_value, inplace=True)
+                data_test[column].fillna(mean_value, inplace=True)
+
+            for column in self.data_handler.get_categorical_features():
+                if column in data_train.columns and not data_train[column].mode().empty:
+                    mode_value = data_train[column].mode()[0]
+                    data_train[column].fillna(mode_value, inplace=True)
+                    data_test[column].fillna(mode_value, inplace=True)
+
+            self.data_handler.set_data_train(data_train)
+            self.data_handler.set_data_test(data_test)
+            self.logger.info("Filled missing values: numerical with mean, categorical with mode.")
+
+        elif strategy == "median":
+            data_train = self.data_handler.get_data_train().copy()
+            data_test = self.data_handler.get_data_test().copy()
+
+            for column in self.data_handler.get_numerical_features():
+                median_value = data_train[column].median()
+                data_train[column].fillna(median_value, inplace=True)
+                data_test[column].fillna(median_value, inplace=True)
+
+            for column in self.data_handler.get_categorical_features():
+                if column in data_train.columns and not data_train[column].mode().empty:
+                    mode_value = data_train[column].mode()[0]
+                    data_train[column].fillna(mode_value, inplace=True)
+                    data_test[column].fillna(mode_value, inplace=True)
+
+            self.data_handler.set_data_train(data_train)
+            self.data_handler.set_data_test(data_test)
+            self.logger.info("Filled missing values: numerical with median, categorical with mode.")
+
+        elif strategy == "mode":
+            data_train = self.data_handler.get_data_train().copy()
+            data_test = self.data_handler.get_data_test().copy()
+
+            for column in data_train.columns:
+                if not data_train[column].mode().empty:
+                    mode_value = data_train[column].mode()[0]
+                    data_train[column].fillna(mode_value, inplace=True)
+                    data_test[column].fillna(mode_value, inplace=True)
+
+            self.data_handler.set_data_train(data_train)
+            self.data_handler.set_data_test(data_test)
+            self.logger.info("Filled missing values: all columns with mode.")
+
+    def _update_feature_types(self) -> None:
+        """
+        Derive categorical and numerical feature sets from the training dataframe.
+        Automatically detects feature types based on pandas dtypes.
+        """
+
+        data_train = self.data_handler.get_data_train()
+        if data_train is None or data_train.empty:
+            self.logger.warning("Cannot update feature types: training data is empty.")
+            return
+
+        categorical_cols = set(data_train.select_dtypes(include=["object", "category", "bool"]).columns)
+        numerical_cols = set(data_train.select_dtypes(include=["number"], exclude=["bool"]).columns)
+
+        self.data_handler.set_categorical_features(categorical_cols)
+        self.data_handler.set_numerical_features(numerical_cols)
+
+        self.logger.info(
+            f"Feature types updated: {len(categorical_cols)} categorical, {len(numerical_cols)} numerical."
+        )
+
+
+    def _handle_out_of_range_values(self) -> None:
+        """
+        Validate and filter records in the combined match+player dataframe.
+        
+        This method handles the joined dataset structure where:
+        - Match metadata: queue_id, game_duration, team1_win
+        - Draft features: bans and picks (champion IDs)
+        - Individual player features: champion_id, ranked_tier, ranked_rank per role
+        - Aggregated team features: team stats (all should be non-negative)
+        """
+        self.logger.info("Validating combined match-player data for out-of-range values.")
+        
+        data_train = self.data_handler.get_data_train()
+        data_test = self.data_handler.get_data_test()
+        initial_train_count = len(data_train)
+        initial_test_count = len(data_test)
+        
+        valid_train = data_train.copy()
+        valid_test = data_test.copy()
+        
+        # ===== Match Metadata Validation =====
+        if 'queue_id' in valid_train.columns:
+            valid_queue_ids = {400, 420, 430, 440, 450}
+            valid_train = valid_train[valid_train['queue_id'].isin(valid_queue_ids)]
+            valid_test = valid_test[valid_test['queue_id'].isin(valid_queue_ids)]
+            self.logger.info("Validated queue_id")
+        
+        if 'game_duration' in valid_train.columns:
+            valid_train = valid_train[(valid_train['game_duration'] > 0) & (valid_train['game_duration'] < 7200)]
+            valid_test = valid_test[(valid_test['game_duration'] > 0) & (valid_test['game_duration'] < 7200)]
+            self.logger.info("Validated game_duration (0 < duration < 7200)")
+        
+        # ===== Draft Features Validation =====
+        valid_champion_ids = fetch_latest_champion_ids()
+        
+        # Validate ban champion IDs
+        ban_columns = [f'team{team}_ban{ban}' for team in [1, 2] for ban in range(1, 6)]
+        for col in ban_columns:
+            if col in valid_train.columns:
+                valid_train = valid_train[valid_train[col].isin(valid_champion_ids)]
+                valid_test = valid_test[valid_test[col].isin(valid_champion_ids)]
+        self.logger.info(f"Validated {len([c for c in ban_columns if c in valid_train.columns])} ban columns")
+        
+        # Validate pick champion IDs
+        pick_columns = [f'team{team}_pick_{role}' for team in [1, 2] 
+                       for role in ['top', 'jungle', 'mid', 'adc', 'support']]
+        for col in pick_columns:
+            if col in valid_train.columns:
+                valid_train = valid_train[valid_train[col].isin(valid_champion_ids)]
+                valid_test = valid_test[valid_test[col].isin(valid_champion_ids)]
+        self.logger.info(f"Validated {len([c for c in pick_columns if c in valid_train.columns])} pick columns")
+        
+        # ===== Individual Player Features Validation =====
+        roles = ['top', 'jungle', 'mid', 'adc', 'support']
+        teams = [1, 2]
+        
+        # Validate individual champion_id per role
+        for team in teams:
+            for role in roles:
+                col = f'team{team}_{role}_champion_id'
+                if col in valid_train.columns:
+                    valid_train = valid_train[valid_train[col].isin(valid_champion_ids)]
+                    valid_test = valid_test[valid_test[col].isin(valid_champion_ids)]
+        self.logger.info(f"Validated {len(roles) * len(teams)} individual player champion_id columns")
+        
+        # Validate ranked_tier per role
+        valid_tiers = {"IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", 
+                      "DIAMOND", "MASTER", "GRANDMASTER", "CHALLENGER"}
+        for team in teams:
+            for role in roles:
+                col = f'team{team}_{role}_ranked_tier'
+                if col in valid_train.columns:
+                    # Allow NaN values (some players may not have ranked data)
+                    mask_train = valid_train[col].isna() | valid_train[col].isin(valid_tiers)
+                    mask_test = valid_test[col].isna() | valid_test[col].isin(valid_tiers)
+                    valid_train = valid_train[mask_train]
+                    valid_test = valid_test[mask_test]
+        self.logger.info(f"Validated {len(roles) * len(teams)} ranked_tier columns (allowing NaN)")
+        
+        # Validate ranked_rank per role
         valid_ranks = {"I", "II", "III", "IV"}
-        valid_data = valid_data[valid_data['ranked_rank'].isin(valid_ranks)]
-        valid_data['ranked_rank'] = valid_data['ranked_rank'].astype(str)
-        ranked_rank_removed = initial_count - puuid_removed - team_id_removed - role_removed - champion_id_removed - summoner_level_removed - champion_mastery_level_removed - champion_total_mastery_score_removed - ranked_tier_removed - len(valid_data)
-        self.logger.info(f"Removed {ranked_rank_removed} records with invalid ranked_rank.")
-
-        # ranked_league_points should be non-negative integers
-        valid_data = valid_data[valid_data['ranked_league_points'] >= 0]
-        valid_data['ranked_league_points'] = valid_data['ranked_league_points'].astype(int)
-        ranked_league_points_removed = initial_count - puuid_removed - team_id_removed - role_removed - champion_id_removed - summoner_level_removed - champion_mastery_level_removed - champion_total_mastery_score_removed - ranked_tier_removed - ranked_rank_removed - len(valid_data)
-        self.logger.info(f"Removed {ranked_league_points_removed} records with invalid ranked_league_points.")
+        for team in teams:
+            for role in roles:
+                col = f'team{team}_{role}_ranked_rank'
+                if col in valid_train.columns:
+                    # Allow NaN values
+                    mask_train = valid_train[col].isna() | valid_train[col].isin(valid_ranks)
+                    mask_test = valid_test[col].isna() | valid_test[col].isin(valid_ranks)
+                    valid_train = valid_train[mask_train]
+                    valid_test = valid_test[mask_test]
+        self.logger.info(f"Validated {len(roles) * len(teams)} ranked_rank columns (allowing NaN)")
         
-        # win_rate should be between 0 and 1
-        valid_data = valid_data[(valid_data['win_rate'] >= 0) & (valid_data['win_rate'] <= 1)]
-        valid_data['win_rate'] = valid_data['win_rate'].astype(float)
-        win_rate_removed = initial_count - puuid_removed - team_id_removed - role_removed - champion_id_removed - summoner_level_removed - champion_mastery_level_removed - champion_total_mastery_score_removed - ranked_tier_removed - ranked_rank_removed - ranked_league_points_removed - len(valid_data)
-        self.logger.info(f"Removed {win_rate_removed} records with invalid win_rate.")
-
-        # numeric columns should be non-negative
-        numeric_columns = [
-            'all_in_pings', 'assist_me_pings', 'command_pings', 'enemy_missing_pings',
-            'enemy_vision_pings', 'hold_pings', 'get_back_pings','need_vision_pings',
-            'on_my_way_pings', 'push_pings', 'vision_cleared_pings', 'average_wards_placed',
-            'average_ward_kills', 'average_sight_wards_bought', 'average_detector_wards_placed',
-            'average_killing_sprees', 'average_largest_killing_spree', 'average_largest_multi_kill',
-            'average_double_kills', 'average_triple_kills', 'average_quadra_kills', 'average_penta_kills',
-            'average_baron_kills', 'average_dragon_kills', 'average_inhibitor_kills', 'average_inhibitor_takedowns',
-            'average_inhibitors_lost', 'average_turret_kills', 'average_turret_takedowns', 'average_turrets_lost',
-            'average_objectives_stolen', 'average_objectives_stolen_assists', 'average_total_damage_dealt_to_champions',
-            'average_physical_damage_dealt_to_champions', 'average_magic_damage_dealt_to_champions',
-            'average_true_damage_dealt_to_champions', 'average_total_damage_taken', 'average_damage_self_mitigated',
-            'average_total_heal', 'average_total_heals_on_teammates', 'average_kills', 'average_deaths',
-            'average_assists', 'kda_ratio', 'win_rate', 'average_cs_per_minute', 'average_kills_per_minute',
-            'average_deaths_per_minute', 'average_assists_per_minute', 'average_total_minions_killed',
-            'average_neutral_minions_killed', 'average_gold_earned', 'average_gold_spent',
-            'average_items_purchased', 'average_time_ccing_others', 'average_total_time_cc_dealt',
-            'average_longest_time_spent_living', 'average_total_time_spent_dead', 'average_vision_score'
-        ]
-
-        for col in numeric_columns:
-            valid_data = valid_data[valid_data[col] >= 0]
-            valid_data[col] = valid_data[col].astype(float)
-        numeric_columns_removed = initial_count - puuid_removed - team_id_removed - role_removed - champion_id_removed - summoner_level_removed - champion_mastery_level_removed - champion_total_mastery_score_removed - ranked_tier_removed - ranked_rank_removed - ranked_league_points_removed - win_rate_removed - len(valid_data)
-        self.logger.info(f"Removed {numeric_columns_removed} records with invalid numeric column values.")
-
-        final_count = len(valid_data)
-        self.logger.info(f"Removed {initial_count - final_count} records with out-of-range values.")
-        return valid_data
+        # ===== Aggregated Team Features Validation =====
+        # All aggregated numeric features should be non-negative
+        agg_prefixes = ['team1_avg_', 'team2_avg_']
+        numeric_agg_cols = [col for col in valid_train.columns 
+                           if any(col.startswith(prefix) for prefix in agg_prefixes)]
+        
+        for col in numeric_agg_cols:
+            if col in valid_train.columns:
+                valid_train = valid_train[valid_train[col] >= 0]
+                valid_test = valid_test[valid_test[col] >= 0]
+        
+        if numeric_agg_cols:
+            self.logger.info(f"Validated {len(numeric_agg_cols)} aggregated team statistic columns (non-negative)")
+        
+        # Update data_handler with validated data
+        self.data_handler.set_data_train(valid_train)
+        self.data_handler.set_data_test(valid_test)
+        
+        # Update labels to match filtered indices
+        labels_train = self.data_handler.get_labels_train().loc[valid_train.index]
+        labels_test = self.data_handler.get_labels_test().loc[valid_test.index]
+        self.data_handler.set_labels_train(labels_train)
+        self.data_handler.set_labels_test(labels_test)
+        
+        final_train_count = len(valid_train)
+        final_test_count = len(valid_test)
+        train_removed = initial_train_count - final_train_count
+        test_removed = initial_test_count - final_test_count
+        
+        self.logger.info(f"Removed {train_removed} training ({train_removed/initial_train_count*100:.2f}%) and {test_removed} testing ({test_removed/initial_test_count*100:.2f}%) records with out-of-range values.")
 
 
