@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
+DATA_PATH = os.getenv("DATA_PATH")
+CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH")
+PARQUET_PATH = os.getenv("PARQUET_PATH")
 RANDOM_SEED = 42
 
 print("RIOT_API_KEY: ", RIOT_API_KEY)
@@ -38,36 +41,34 @@ requester = Requester(base_url_v4=base_url_v4, base_url_v5=base_url_v5, headers=
 # get puuid of summoner
 game_name = "PedroGF45"
 tag_line = "EUW"
-data_path = "F:\\Code\\lol-draft-predictor\\data"
-checkpoint_file_path = "F:\\Code\\lol-draft-predictor\\data\\pickle\\checkpoint.pkl"
 parquet_handler = ParquetHandler(logger=logger, random_state=RANDOM_SEED)
 
-# Phase 1: Discover matches (uncomment to run discovery)
-""" data_miner = DataMiner(logger=logger, 
+""" # Phase 1: Discover matches (uncomment to run discovery)
+data_miner = DataMiner(logger=logger, 
+                       parquet_handler=parquet_handler,
                        requester=requester, 
-                        raw_data_path=data_path, 
+                        raw_data_path=DATA_PATH, 
                        patient_zero_game_name=game_name, 
                         patient_zero_tag_line=tag_line)
 response = data_miner.start_search(search_mode="matches", 
                                           target_number_of_players=1000,
-                                           target_number_of_matches=1000) """
+                                           target_number_of_matches=100) """
 
-""" # Phase 2: Fetch and enrich matches
+# Phase 2: Fetch and enrich matches
 
-checkpoint_path = os.path.join(data_path, "pickle", "match_fetcher_checkpoint.pkl")
 match_fetcher = MatchFetcher(requester=requester, 
                              logger=logger, 
                              parquet_handler=parquet_handler, 
-                             dataframe_target_path=data_path, 
-                             checkpoint_loading_path=checkpoint_path,
-                             load_percentage=0.01,
+                             dataframe_target_path=DATA_PATH, 
+                             checkpoint_loading_path=CHECKPOINT_PATH,
+                             load_percentage=100,
                              random_state=RANDOM_SEED)
-match_fetcher.fetch_match_data(parquet_path=parquet_file_path, match_limit_per_player=10) """
+match_fetcher.fetch_match_data(parquet_path=PARQUET_PATH, match_limit_per_player=10)
 
-
-""" target_cleaned_file_path = "F:\\Code\\lol-draft-predictor\\data\\cleaned\\player_history.parquet"
+"""
+target_cleaned_file_path = "F:\\Code\\lol-draft-predictor\\data\\cleaned\\player_history.parquet"
 data_cleaner = DataCleaner(requester=requester, logger=logger, parquet_handler=parquet_handler)
-data_cleaner.clean_data(raw_data_path=parquet_file_path, cleaned_data_path=target_cleaned_file_path, mode="players") """
+data_cleaner.clean_data(raw_data_path=parquet_file_path, cleaned_data_path=target_cleaned_file_path, mode="players") 
 
 parquet_file_path = "F:\\Code\\lol-draft-predictor\\data\\player_history.parquet"
 
@@ -84,4 +85,4 @@ data_visualizer.perform_eda(
     n_repeats=2,
     data_input_path=parquet_file_path,
     data_output_path="F:\\Code\\lol-draft-predictor\\data\\visualizations"
-)
+)"""
