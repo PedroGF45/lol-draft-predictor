@@ -320,68 +320,79 @@ class DataHandler:
         self.logger.info(f"Training labels shape: {self.labels_train.shape}")
         self.logger.info(f"Testing labels shape: {self.labels_test.shape}")
 
-    def save_cleaned_data(self, output_dir: str) -> None:
+    def save_cleaned_data(self, output_dir: str) -> str:
         """
-        Save cleaned train/test data and labels as separate parquet files.
+        Save cleaned train/test data and labels as separate parquet files in a timestamped subdirectory.
 
         Args:
-            output_dir (str): Full directory path for cleaned data (e.g., 'data/cleaned/matches').
+            output_dir (str): Base directory path for cleaned data (e.g., 'data/cleaned/matches').
+            
+        Returns:
+            str: Path to the created timestamped subdirectory.
         """
-
-        # Create output directory
-        os.makedirs(output_dir, exist_ok=True)
 
         # Generate timestamp for versioning
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # Create timestamped subdirectory
+        timestamped_dir = os.path.join(output_dir, timestamp)
+        os.makedirs(timestamped_dir, exist_ok=True)
 
-        # Save each component
-        train_data_path = os.path.join(output_dir, f"{timestamp}_data_train.parquet")
-        test_data_path = os.path.join(output_dir, f"{timestamp}_data_test.parquet")
-        train_labels_path = os.path.join(output_dir, f"{timestamp}_labels_train.parquet")
-        test_labels_path = os.path.join(output_dir, f"{timestamp}_labels_test.parquet")
+        # Save each component without timestamp prefix (directory already has it)
+        train_data_path = os.path.join(timestamped_dir, "data_train.parquet")
+        test_data_path = os.path.join(timestamped_dir, "data_test.parquet")
+        train_labels_path = os.path.join(timestamped_dir, "labels_train.parquet")
+        test_labels_path = os.path.join(timestamped_dir, "labels_test.parquet")
 
         self.parquet_handler.write_parquet(self.data_train, train_data_path)
         self.parquet_handler.write_parquet(self.data_test, test_data_path)
         self.parquet_handler.write_parquet(self.labels_train.to_frame(), train_labels_path)
         self.parquet_handler.write_parquet(self.labels_test.to_frame(), test_labels_path)
 
-        self.logger.info(f"Cleaned data saved to {output_dir}:")
+        self.logger.info(f"Cleaned data saved to {timestamped_dir}:")
         self.logger.info(f"  - Train data: {train_data_path}")
         self.logger.info(f"  - Test data: {test_data_path}")
         self.logger.info(f"  - Train labels: {train_labels_path}")
         self.logger.info(f"  - Test labels: {test_labels_path}")
+        
+        return timestamped_dir
 
     def load_cleaned_data(self, input_dir: str, timestamp: str = None) -> None:
         """
-        Load cleaned train/test data and labels from separate parquet files.
+        Load cleaned train/test data and labels from separate parquet files in a timestamped subdirectory.
 
         Args:
-            input_dir (str): Full directory path for cleaned data (e.g., 'data/cleaned/matches').
-            timestamp (str): Optional timestamp prefix to load specific version (e.g., '20251218_153045').
-                           If None, loads the most recent files.
+            input_dir (str): Base directory path for cleaned data (e.g., 'data/cleaned/matches').
+            timestamp (str): Optional timestamp subdirectory name to load specific version (e.g., '20251218_153045').
+                           If None, loads from the most recent timestamped subdirectory.
         """
         
         if not os.path.exists(input_dir):
             raise FileNotFoundError(f"Directory not found: {input_dir}")
 
-        # Find files matching the pattern
+        # Find timestamped subdirectory
         if timestamp:
-            pattern_prefix = f"{timestamp}_"
+            timestamped_dir = os.path.join(input_dir, timestamp)
+            if not os.path.exists(timestamped_dir):
+                raise FileNotFoundError(f"Timestamped subdirectory not found: {timestamped_dir}")
         else:
-            # Get most recent files by timestamp
-            all_train_files = glob.glob(os.path.join(input_dir, "*_data_train.parquet"))
-            if not all_train_files:
-                raise FileNotFoundError(f"No cleaned data files found in {input_dir}")
-            # Extract timestamp from most recent file
-            most_recent = max(all_train_files)
-            timestamp = os.path.basename(most_recent).split("_data_train.parquet")[0]
-            pattern_prefix = f"{timestamp}_"
+            # Get all subdirectories that look like timestamps
+            subdirs = [d for d in os.listdir(input_dir) 
+                      if os.path.isdir(os.path.join(input_dir, d)) and 
+                      d.replace('_', '').isdigit() and len(d) == 15]  # Format: YYYYMMDD_HHMMSS
+            
+            if not subdirs:
+                raise FileNotFoundError(f"No timestamped subdirectories found in {input_dir}")
+            
+            # Get most recent timestamp
+            timestamp = max(subdirs)
+            timestamped_dir = os.path.join(input_dir, timestamp)
 
         # Construct file paths
-        train_data_path = os.path.join(input_dir, f"{pattern_prefix}data_train.parquet")
-        test_data_path = os.path.join(input_dir, f"{pattern_prefix}data_test.parquet")
-        train_labels_path = os.path.join(input_dir, f"{pattern_prefix}labels_train.parquet")
-        test_labels_path = os.path.join(input_dir, f"{pattern_prefix}labels_test.parquet")
+        train_data_path = os.path.join(timestamped_dir, "data_train.parquet")
+        test_data_path = os.path.join(timestamped_dir, "data_test.parquet")
+        train_labels_path = os.path.join(timestamped_dir, "labels_train.parquet")
+        test_labels_path = os.path.join(timestamped_dir, "labels_test.parquet")
 
         # Verify all files exist
         for path in [train_data_path, test_data_path, train_labels_path, test_labels_path]:
@@ -399,7 +410,7 @@ class DataHandler:
         self.labels_train = labels_train_df[labels_train_df.columns[0]]
         self.labels_test = labels_test_df[labels_test_df.columns[0]]
 
-        self.logger.info(f"Cleaned data loaded from {input_dir} (timestamp: {timestamp}):")
+        self.logger.info(f"Cleaned data loaded from {timestamped_dir}:")
         self.logger.info(f"  - Train data shape: {self.data_train.shape}")
         self.logger.info(f"  - Test data shape: {self.data_test.shape}")
         self.logger.info(f"  - Train labels shape: {self.labels_train.shape}")
