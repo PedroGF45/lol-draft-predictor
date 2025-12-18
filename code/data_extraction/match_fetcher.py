@@ -55,7 +55,7 @@ class MatchFetcher:
         self.load_percentage = load_percentage
         self.random_state = random_state
 
-        self.dataframe_target_path = os.path.join(dataframe_target_path, "preprocess")
+        self.dataframe_target_path = dataframe_target_path
         
         if not self.parquet_handler.check_directory_exists(self.dataframe_target_path):
             self.parquet_handler.create_directory(self.dataframe_target_path)
