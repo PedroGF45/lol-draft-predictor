@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+joblib==1.4.2
+numpy==2.2.1
+scikit-learn==1.6.0
+pandas==2.2.3
+pyarrow==18.1.0
+python-dotenv==1.0.0
+
+# IMPORTANT: Do NOT install CPU-only PyTorch via this requirements file.
+# Install a CUDA-enabled PyTorch build separately, e.g.:
+#   pip install --index-url https://download.pytorch.org/whl/cu121 torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1
+# or with conda:
+#   conda install pytorch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 pytorch-cuda=12.1 -c pytorch -c nvidia
