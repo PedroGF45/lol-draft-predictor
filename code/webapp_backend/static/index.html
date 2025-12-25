@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LoL Draft Predictor</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #0b1221; color: #e6edf3; }
+    header { background: #0e1a2b; padding: 16px 24px; border-bottom: 1px solid #18273a; }
+    main { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 20px; margin: 0; }
+    .card { background: #0e1a2b; border: 1px solid #18273a; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .row .field { display: flex; flex-direction: column; }
+    label { font-size: 12px; color: #9fb7d0; margin-bottom: 4px; }
+    input[type="number"] { background: #0b1221; border: 1px solid #22344d; color: #e6edf3; border-radius: 6px; padding: 8px; }
+    .actions { display: flex; gap: 8px; }
+    button { background: #347d39; border: none; color: white; padding: 10px 14px; border-radius: 6px; cursor: pointer; }
+    button.secondary { background: #134579; }
+    .result { white-space: pre-wrap; background: #0b1221; border: 1px solid #22344d; padding: 12px; border-radius: 6px; }
+    .warn { color: #ffcc66; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LoL Draft Predictor</h1>
+  </header>
+  <main>
+    <div class="card" id="modelInfo">
+      <div id="modelStatus">Loading model info…</div>
+      <div id="modelMeta" style="display:none">
+        <p><strong>Model:</strong> <span id="modelName"></span></p>
+        <p><strong>Accuracy:</strong> <span id="modelAccuracy"></span></p>
+        <p><strong>GPU:</strong> <span id="gpuStatus" class="warn"></span></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Predict Match Outcome</h3>
+      <p>Enter a League of Legends match ID to predict the winner.</p>
+      <div class="field">
+        <label>Match ID</label>
+        <input type="text" id="matchId" placeholder="EUW1_1234567890" style="width: 100%; max-width: 400px;" />
+        <p style="font-size: 11px; color: #9fb7d0; margin-top: 4px;">Example: EUW1_7115169830</p>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button id="predictBtn">Predict Winner</button>
+        <button class="secondary" id="clearBtn">Clear</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Prediction Result</h3>
+      <div class="result" id="resultBox">No result yet.</div>
+    </div>
+  </main>
+
+  <script>
+    async function fetchModelInfo() {
+      const r = await fetch('/model-info');
+      if (!r.ok) {
+        document.getElementById('modelStatus').textContent = 'Model not loaded yet. Train and save a best model.';
+        return;
+      }
+      const info = await r.json();
+      document.getElementById('modelStatus').style.display = 'none';
+      document.getElementById('modelMeta').style.display = 'block';
+      document.getElementById('modelName').textContent = info.model_name;
+      document.getElementById('modelAccuracy').textContent = (info.metrics.accuracy * 100).toFixed(2) + '%';
+      try {
+        const gpuR = await fetch('/health');
+        document.getElementById('gpuStatus').textContent = 'Backend enforces GPU for DL models';
+      } catch (e) {
+        document.getElementById('gpuStatus').textContent = 'Unknown';
+      }
+    }
+
+    async function predict() {
+      const matchId = document.getElementById('matchId').value.trim();
+      if (!matchId) {
+        document.getElementById('resultBox').textContent = 'Please enter a match ID.';
+        return;
+      }
+
+      document.getElementById('resultBox').textContent = 'Predicting... (fetching match, cleaning, feature engineering)';
+      
+      try {
+        const r = await fetch('/predict-match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ match_id: matchId })
+        });
+        
+        if (!r.ok) {
+          const errText = await r.text();
+          document.getElementById('resultBox').textContent = `Error: ${errText}`;
+          return;
+        }
+        
+        const result = await r.json();
+        const redPct = (result.team_red_win_probability * 100).toFixed(2);
+        const bluePct = (result.team_blue_win_probability * 100).toFixed(2);
+        const winner = result.predicted_winner.toUpperCase();
+        
+        document.getElementById('resultBox').innerHTML = `
+<strong>Match ID:</strong> ${result.match_id}
+
+<strong style="color: #f85149">🔴 Team Red Win Probability:</strong> ${redPct}%
+<strong style="color: #3fb950">🔵 Team Blue Win Probability:</strong> ${bluePct}%
+
+<strong>Predicted Winner:</strong> <span style="color: ${winner === 'RED' ? '#f85149' : '#3fb950'}">${winner}</span>
+        `.trim();
+      } catch (e) {
+        document.getElementById('resultBox').textContent = `Request failed: ${e.message}`;
+      }
+    }
+
+    function clearForm() {
+      document.getElementById('matchId').value = '';
+      document.getElementById('resultBox').textContent = 'No result yet.';
+    }
+
+    document.getElementById('predictBtn').addEventListener('click', predict);
+    document.getElementById('clearBtn').addEventListener('click', clearForm);
+    document.getElementById('matchId').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') predict();
+    });
+
+    fetchModelInfo();
+  </script>
+</body>
+</html>
