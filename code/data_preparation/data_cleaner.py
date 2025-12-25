@@ -119,14 +119,14 @@ class DataCleaner:
         final_count = len(data_train_without_duplicates)
         self.logger.info(f"Removed {initial_count - final_count} duplicate records.")
     
-    def _handle_missing_values(self, strategy: str = "drop") -> None:
+    def _handle_missing_values(self, strategy: str = "mean") -> None:
         """
         Handle missing values using the specified strategy.
 
         Args:
             strategy (str): Strategy for handling missing values.
-                - 'drop': Remove rows with any missing values
-                - 'mean': Fill numerical with mean, categorical with mode
+                - 'drop': Remove rows with any missing values (NOT RECOMMENDED - will delete all data)
+                - 'mean': Fill numerical with mean, categorical with mode (DEFAULT)
                 - 'median': Fill numerical with median, categorical with mode
                 - 'mode': Fill all columns with mode
 
@@ -143,6 +143,38 @@ class DataCleaner:
             self.logger.info("No missing values found.")
             return
         
+        self.logger.info(f"There are {self.data_handler.get_data_train().isnull().sum().sum()} missing values in training data and {self.data_handler.get_data_test().isnull().sum().sum()} missing values in testing data.")
+
+        # ===== Custom imputation for ranked features BEFORE general strategy =====
+        data_train = self.data_handler.get_data_train().copy()
+        data_test = self.data_handler.get_data_test().copy()
+        
+        # Fill ranked_tier with "UNRANKED" for players without ranked data
+        ranked_tier_cols = [col for col in data_train.columns if 'ranked_tier' in col]
+        if ranked_tier_cols:
+            for col in ranked_tier_cols:
+                train_missing = data_train[col].isnull().sum()
+                test_missing = data_test[col].isnull().sum()
+                if train_missing > 0 or test_missing > 0:
+                    data_train[col] = data_train[col].fillna("UNRANKED")
+                    data_test[col] = data_test[col].fillna("UNRANKED")
+            self.logger.info(f"Filled {len(ranked_tier_cols)} ranked_tier columns with 'UNRANKED'")
+        
+        # Fill ranked_rank with "IV" (lowest division) for consistency
+        ranked_rank_cols = [col for col in data_train.columns if 'ranked_rank' in col]
+        if ranked_rank_cols:
+            for col in ranked_rank_cols:
+                train_missing = data_train[col].isnull().sum()
+                test_missing = data_test[col].isnull().sum()
+                if train_missing > 0 or test_missing > 0:
+                    data_train[col] = data_train[col].fillna("IV")
+                    data_test[col] = data_test[col].fillna("IV")
+            self.logger.info(f"Filled {len(ranked_rank_cols)} ranked_rank columns with 'IV'")
+        
+        # Update data_handler with imputed ranked features
+        self.data_handler.set_data_train(data_train)
+        self.data_handler.set_data_test(data_test)
+
         initial_train_count = len(self.data_handler.get_data_train())
         initial_test_count = len(self.data_handler.get_data_test())
 
@@ -169,14 +201,14 @@ class DataCleaner:
 
             for column in self.data_handler.get_numerical_features():
                 mean_value = data_train[column].mean()
-                data_train[column].fillna(mean_value, inplace=True)
-                data_test[column].fillna(mean_value, inplace=True)
+                data_train[column] = data_train[column].fillna(mean_value)
+                data_test[column] = data_test[column].fillna(mean_value)
 
             for column in self.data_handler.get_categorical_features():
                 if column in data_train.columns and not data_train[column].mode().empty:
                     mode_value = data_train[column].mode()[0]
-                    data_train[column].fillna(mode_value, inplace=True)
-                    data_test[column].fillna(mode_value, inplace=True)
+                    data_train[column] = data_train[column].fillna(mode_value)
+                    data_test[column] = data_test[column].fillna(mode_value)
 
             self.data_handler.set_data_train(data_train)
             self.data_handler.set_data_test(data_test)
@@ -188,14 +220,14 @@ class DataCleaner:
 
             for column in self.data_handler.get_numerical_features():
                 median_value = data_train[column].median()
-                data_train[column].fillna(median_value, inplace=True)
-                data_test[column].fillna(median_value, inplace=True)
+                data_train[column] = data_train[column].fillna(median_value)
+                data_test[column] = data_test[column].fillna(median_value)
 
             for column in self.data_handler.get_categorical_features():
                 if column in data_train.columns and not data_train[column].mode().empty:
                     mode_value = data_train[column].mode()[0]
-                    data_train[column].fillna(mode_value, inplace=True)
-                    data_test[column].fillna(mode_value, inplace=True)
+                    data_train[column] = data_train[column].fillna(mode_value)
+                    data_test[column] = data_test[column].fillna(mode_value)
 
             self.data_handler.set_data_train(data_train)
             self.data_handler.set_data_test(data_test)
@@ -208,8 +240,8 @@ class DataCleaner:
             for column in data_train.columns:
                 if not data_train[column].mode().empty:
                     mode_value = data_train[column].mode()[0]
-                    data_train[column].fillna(mode_value, inplace=True)
-                    data_test[column].fillna(mode_value, inplace=True)
+                    data_train[column] = data_train[column].fillna(mode_value)
+                    data_test[column] = data_test[column].fillna(mode_value)
 
             self.data_handler.set_data_train(data_train)
             self.data_handler.set_data_test(data_test)
@@ -302,32 +334,32 @@ class DataCleaner:
                     valid_test = valid_test[valid_test[col].isin(valid_champion_ids)]
         self.logger.info(f"Validated {len(roles) * len(teams)} individual player champion_id columns")
         
-        # Validate ranked_tier per role
+        # Validate ranked_tier per role (no NaN; allow explicit 'UNRANKED')
         valid_tiers = {"IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", 
-                      "DIAMOND", "MASTER", "GRANDMASTER", "CHALLENGER"}
+                      "DIAMOND", "MASTER", "GRANDMASTER", "CHALLENGER", "UNRANKED"}
         for team in teams:
             for role in roles:
                 col = f'team{team}_{role}_ranked_tier'
                 if col in valid_train.columns:
-                    # Allow NaN values (some players may not have ranked data)
-                    mask_train = valid_train[col].isna() | valid_train[col].isin(valid_tiers)
-                    mask_test = valid_test[col].isna() | valid_test[col].isin(valid_tiers)
+                    # Disallow NaN; only valid tiers or explicit 'UNRANKED'
+                    mask_train = valid_train[col].isin(valid_tiers)
+                    mask_test = valid_test[col].isin(valid_tiers)
                     valid_train = valid_train[mask_train]
                     valid_test = valid_test[mask_test]
-        self.logger.info(f"Validated {len(roles) * len(teams)} ranked_tier columns (allowing NaN)")
+        self.logger.info(f"Validated {len(roles) * len(teams)} ranked_tier columns (allowing 'UNRANKED', no NaN)")
         
-        # Validate ranked_rank per role
+        # Validate ranked_rank per role (no NaN)
         valid_ranks = {"I", "II", "III", "IV"}
         for team in teams:
             for role in roles:
                 col = f'team{team}_{role}_ranked_rank'
                 if col in valid_train.columns:
-                    # Allow NaN values
-                    mask_train = valid_train[col].isna() | valid_train[col].isin(valid_ranks)
-                    mask_test = valid_test[col].isna() | valid_test[col].isin(valid_ranks)
+                    # Disallow NaN; only valid ranks
+                    mask_train = valid_train[col].isin(valid_ranks)
+                    mask_test = valid_test[col].isin(valid_ranks)
                     valid_train = valid_train[mask_train]
                     valid_test = valid_test[mask_test]
-        self.logger.info(f"Validated {len(roles) * len(teams)} ranked_rank columns (allowing NaN)")
+        self.logger.info(f"Validated {len(roles) * len(teams)} ranked_rank columns (no NaN)")
         
         # ===== Aggregated Team Features Validation =====
         # All aggregated numeric features should be non-negative
@@ -358,6 +390,10 @@ class DataCleaner:
         train_removed = initial_train_count - final_train_count
         test_removed = initial_test_count - final_test_count
         
-        self.logger.info(f"Removed {train_removed} training ({train_removed/initial_train_count*100:.2f}%) and {test_removed} testing ({test_removed/initial_test_count*100:.2f}%) records with out-of-range values.")
+        # Calculate percentages with zero division protection
+        train_pct = (train_removed/initial_train_count*100) if initial_train_count > 0 else 0.0
+        test_pct = (test_removed/initial_test_count*100) if initial_test_count > 0 else 0.0
+        
+        self.logger.info(f"Removed {train_removed} training ({train_pct:.2f}%) and {test_removed} testing ({test_pct:.2f}%) records with out-of-range values.")
 
 

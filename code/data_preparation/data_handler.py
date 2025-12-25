@@ -1,70 +1,82 @@
 from helpers.parquet_handler import ParquetHandler
+from helpers.master_data_registry import MasterDataRegistry
 from logging import Logger
 from sklearn.model_selection import train_test_split
 import pandas as pd
 import os
 from datetime import datetime
-import glob
+from typing import Optional, Tuple, Set, List, Dict, Any, cast
+# glob is currently unused; remove if not needed
+
+# Constants to avoid duplicated literals
+_ERR_NO_DF = "No dataframe loaded. Call load_data or join_match_and_player_data first."
+_FILE_TRAIN_DATA = "data_train.parquet"
+_FILE_TEST_DATA = "data_test.parquet"
+_FILE_TRAIN_LABELS = "labels_train.parquet"
+_FILE_TEST_LABELS = "labels_test.parquet"
 
 class DataHandler:
-    def __init__(self, logger: Logger, parquet_handler: ParquetHandler, target_feature: str, test_size: float = 0.2, random_state: int = 42):
+    def __init__(self, logger: Logger, parquet_handler: ParquetHandler, target_feature: str, 
+                 test_size: float = 0.2, random_state: int = 42, 
+                 master_registry: Optional[MasterDataRegistry] = None):
         self.logger = logger
         self.parquet_handler = parquet_handler
         self.target_feature = target_feature
         self.test_size = test_size
         self.random_state = random_state
+        self.master_registry = master_registry
 
-        self.data_train = None
-        self.data_test = None
-        self.labels_train = None
-        self.labels_test = None
+        self.data_train: Optional[pd.DataFrame] = None
+        self.data_test: Optional[pd.DataFrame] = None
+        self.labels_train: Optional[pd.Series] = None
+        self.labels_test: Optional[pd.Series] = None
         
         self._temp_dataframe = None
 
         # Use sets to track feature names
-        self.categorical_features = set()
-        self.numerical_features = set()
+        self.categorical_features: Set[str] = set()
+        self.numerical_features: Set[str] = set()
 
-    def get_data_train(self):
+    def get_data_train(self) -> Optional[pd.DataFrame]:
         return self.data_train
     
-    def set_data_train(self, data_train):
+    def set_data_train(self, data_train: pd.DataFrame) -> None:
         self.data_train = data_train
     
-    def get_data_test(self):
+    def get_data_test(self) -> Optional[pd.DataFrame]:
         return self.data_test
     
-    def set_data_test(self, data_test):
+    def set_data_test(self, data_test: pd.DataFrame) -> None:
         self.data_test = data_test
     
-    def get_labels_train(self):
+    def get_labels_train(self) -> Optional[pd.Series]:
         return self.labels_train
     
-    def set_labels_train(self, labels_train):
+    def set_labels_train(self, labels_train: pd.Series) -> None:
         self.labels_train = labels_train
     
-    def get_labels_test(self):
+    def get_labels_test(self) -> Optional[pd.Series]:
         return self.labels_test
     
-    def set_labels_test(self, labels_test):
+    def set_labels_test(self, labels_test: pd.Series) -> None:
         self.labels_test = labels_test
 
-    def set_categorical_features(self, categorical_features: set):
+    def set_categorical_features(self, categorical_features: Set[str]) -> None:
         self.categorical_features = categorical_features
 
-    def set_numerical_features(self, numerical_features: set):
+    def set_numerical_features(self, numerical_features: Set[str]) -> None:
         self.numerical_features = numerical_features
 
-    def get_categorical_features(self):
+    def get_categorical_features(self) -> Set[str]:
         return self.categorical_features
     
-    def get_numerical_features(self):
+    def get_numerical_features(self) -> Set[str]:
         return self.numerical_features
     
-    def add_categorical_feature(self, feature_name):
+    def add_categorical_feature(self, feature_name: str) -> None:
         self.categorical_features.add(feature_name)
 
-    def add_numerical_feature(self, feature_name):
+    def add_numerical_feature(self, feature_name: str) -> None:
         self.numerical_features.add(feature_name)
     
     def get_combined_dataframe(self) -> pd.DataFrame:
@@ -94,9 +106,9 @@ class DataHandler:
         if self._temp_dataframe is not None:
             return self._temp_dataframe.copy()
         
-        raise ValueError("No data loaded. Call load_data or join_match_and_player_data first.")
+        raise ValueError(_ERR_NO_DF)
 
-    def _categorize_features(self) -> dict:
+    def _categorize_features(self) -> Dict[str, List[str]]:
         """
         Automatically categorize features in the dataframe into different types.
         
@@ -115,11 +127,11 @@ class DataHandler:
         elif self.data_train is not None:
             dataframe = self.get_combined_dataframe()
         else:
-            raise ValueError("No dataframe loaded. Call load_data or join_match_and_player_data first.")
+            raise ValueError(_ERR_NO_DF)
         
         cols = set(dataframe.columns)
         
-        categorized = {
+        categorized: Dict[str, List[str]] = {
             'match_meta': [],
             'draft_bans': [],
             'draft_picks': [],
@@ -145,7 +157,7 @@ class DataHandler:
         
         return categorized
 
-    def get_feature_summary(self) -> dict:
+    def get_feature_summary(self) -> Dict[str, Any]:
         """
         Get a summary of features in the current dataframe.
         
@@ -190,8 +202,9 @@ class DataHandler:
             summary = self.get_feature_summary()
             self.logger.info(f"Feature summary: {summary['total_features']} total features")
             self.logger.info(f"  Breakdown: {summary['feature_breakdown']}")
-        except:
-            pass  # Skip if categorization not applicable
+        except Exception as e:
+            # Skip if categorization not applicable
+            self.logger.debug(f"Feature categorization not available: {e}")
 
     def join_match_and_player_data(self, match_parquet_path: str, player_parquet_path: str, 
                                     aggregation_strategy: str = "mean", load_percentage: float = 1.0) -> None:
@@ -233,16 +246,49 @@ class DataHandler:
         players_df['role'] = players_df['role'].replace(role_mapping)
         
         # ====== Part 1: Pivot individual player features by role ======
+        # Only include the 5 standard roles - exclude 'unknown' to prevent missing champion_id values
+        valid_roles = ['top', 'jungle', 'middle', 'adc', 'support']
+        players_with_known_roles = players_df[players_df['role'].isin(valid_roles)].copy()
+        
+        unknown_role_count = len(players_df) - len(players_with_known_roles)
+        if unknown_role_count > 0:
+            self.logger.warning(f"Found {unknown_role_count} players with unknown roles - excluding from individual features but including in team aggregates")
+        
+        # Validate: each match must have ALL 5 unique roles per team (no duplicates, no missing)
+        # Group by match_id and team to check role completeness
+        role_check = players_with_known_roles.groupby(['match_id', 'team'])['role'].apply(set).reset_index()
+        required_roles = set(valid_roles)
+        
+        # Find matches where either team doesn't have all 5 roles
+        incomplete_matches = []
+        for _, row in role_check.iterrows():
+            if row['role'] != required_roles:
+                incomplete_matches.append(row['match_id'])
+        
+        # Also check that each match has exactly 2 teams
+        team_counts = players_with_known_roles.groupby('match_id')['team'].nunique()
+        incomplete_matches.extend(team_counts[team_counts != 2].index.tolist())
+        
+        incomplete_matches = list(set(incomplete_matches))  # Remove duplicates
+        
+        if incomplete_matches:
+            self.logger.warning(f"Excluding {len(incomplete_matches)} matches with incomplete role assignments (missing or duplicate roles)")
+            # Filter out incomplete matches from ALL dataframes
+            players_with_known_roles = players_with_known_roles[~players_with_known_roles['match_id'].isin(incomplete_matches)]
+            players_df = players_df[~players_df['match_id'].isin(incomplete_matches)]
+            matches_df = matches_df[~matches_df['match_id'].isin(incomplete_matches)]
+            self.logger.info(f"Retained {len(matches_df)} matches with complete 5v5 role assignments")
+        
         individual_cols = ['champion_id', 'ranked_tier', 'ranked_rank']
         
-        player_features_list = []
+        player_features_list: List[pd.DataFrame] = []
         for col in individual_cols:
             # Pivot: rows=match_id, columns=team+role, values=col
-            pivoted = players_df.pivot_table(
+            pivoted = players_with_known_roles.pivot_table(
                 index='match_id',
                 columns=['team', 'role'],
                 values=col,
-                aggfunc='first'  # Take first value (should be only one per match-team-role)
+                aggfunc=lambda s: s.iloc[0]  # Take first value (should be only one per match-team-role)
             )
             # Flatten multi-level columns: (team1, top) -> team1_top_champion_id
             pivoted.columns = [f'{team}_{role}_{col}' for team, role in pivoted.columns]
@@ -260,7 +306,7 @@ class DataHandler:
         self.logger.info(f"Aggregating {len(numeric_cols)} numeric player features per team using '{aggregation_strategy}'")
         
         # Aggregate player stats by match_id and team_id
-        agg_dict = {col: aggregation_strategy for col in numeric_cols}
+        agg_dict = dict.fromkeys(numeric_cols, aggregation_strategy)
         team_stats = players_df.groupby(['match_id', 'team_id']).agg(agg_dict).reset_index()
         
         # Pivot to get team1 (100) and team2 (200) stats as separate columns
@@ -278,8 +324,9 @@ class DataHandler:
         combined_df = combined_df.merge(team2_stats, on='match_id', how='left')
         
         # Drop match_id as it's not a feature
-        if 'match_id' in combined_df.columns:
-            combined_df = combined_df.drop('match_id', axis=1)
+        # Keep match_id and game_version for registry tracking (they'll be dropped before model training)
+        # These columns are essential for the Master Data Registry to track uniqueness and prevent leakage
+        self.logger.info("Preserving 'match_id' and 'game_version' columns for registry tracking")
         
         self._temp_dataframe = combined_df
         self.logger.info(f"Combined dataframe shape: {self._temp_dataframe.shape}")
@@ -310,7 +357,7 @@ class DataHandler:
         elif self.data_train is not None:
             dataframe = self.get_combined_dataframe()
         else:
-            raise ValueError("No dataframe loaded. Call load_data or join_match_and_player_data first.")
+            raise ValueError(_ERR_NO_DF)
         
         if self.target_feature not in dataframe.columns:
             raise ValueError(f"Target feature '{self.target_feature}' not found in dataframe. "
@@ -333,6 +380,8 @@ class DataHandler:
         """
         Split the dataframe into training and testing sets.
         
+        If master_registry is provided, registers the split assignments to prevent data leakage.
+        
         Validates data before splitting and separates features from target.
         Clears temporary dataframe after splitting to free memory.
         """
@@ -343,7 +392,7 @@ class DataHandler:
         if self._temp_dataframe is not None:
             dataframe = self._temp_dataframe
         else:
-            raise ValueError("No dataframe loaded. Call load_data or join_match_and_player_data first.")
+            raise ValueError(_ERR_NO_DF)
 
         self.logger.info("Splitting data into training and testing sets")
         X = dataframe.drop(columns=[self.target_feature])
@@ -361,6 +410,17 @@ class DataHandler:
         self.labels_train = y_train.reset_index(drop=True)
         self.labels_test = y_test.reset_index(drop=True)
         
+        # Register splits with master registry if available
+        if self.master_registry:
+            self.logger.info("Registering train/test splits with master registry")
+            train_df = cast(pd.DataFrame, self.data_train)
+            test_df = cast(pd.DataFrame, self.data_test)
+            train_keys = self._extract_match_keys(train_df)
+            test_keys = self._extract_match_keys(test_df)
+            self.master_registry.assign_splits(train_keys, test_keys)
+            self.master_registry.validate_no_leakage()
+            self.logger.info("Split registration complete - no data leakage detected")
+        
         # Clear temporary dataframe to free memory
         self._temp_dataframe = None
 
@@ -368,6 +428,55 @@ class DataHandler:
         self.logger.info(f"Testing data shape: {self.data_test.shape}")
         self.logger.info(f"Training labels shape: {self.labels_train.shape}")
         self.logger.info(f"Testing labels shape: {self.labels_test.shape}")
+    
+    def _extract_match_keys(self, dataframe: pd.DataFrame) -> Set[Tuple[str, str]]:
+        """
+        Extract (match_id, game_version) tuples from a dataframe.
+        
+        Args:
+            dataframe (pd.DataFrame): DataFrame containing match data
+            
+        Returns:
+            Set[Tuple[str, str]]: Set of (match_id, game_version) tuples
+        """
+        match_keys: Set[Tuple[str, str]] = set()
+        
+        # Try to find match_id/game_version in columns
+        if 'match_id' in dataframe.columns and 'game_version' in dataframe.columns:
+            # Vectorized extraction for performance
+            match_keys = set(zip(
+                dataframe['match_id'].astype(str).tolist(),
+                dataframe['game_version'].astype(str).tolist()
+            ))
+            self.logger.info(f"Extracted {len(match_keys)} unique match keys for registry")
+        else:
+            self.logger.warning("Could not extract match_id/game_version from dataframe - columns not found")
+            if 'match_id' not in dataframe.columns:
+                self.logger.warning("  - 'match_id' column is missing")
+            if 'game_version' not in dataframe.columns:
+                self.logger.warning("  - 'game_version' column is missing")
+        
+        return match_keys
+
+    def drop_tracking_columns(self) -> None:
+        """
+        Drop match_id and game_version columns from train/test sets.
+        
+        Call this AFTER registering splits with registry, but BEFORE model training.
+        These columns are needed for registry tracking but not for model features.
+        """
+        tracking_cols = ['match_id', 'game_version']
+        
+        for col in tracking_cols:
+            if self.data_train is not None and col in self.data_train.columns:
+                self.data_train = self.data_train.drop(columns=[col])
+                self.logger.info(f"Dropped '{col}' from training set")
+            
+            if self.data_test is not None and col in self.data_test.columns:
+                self.data_test = self.data_test.drop(columns=[col])
+                self.logger.info(f"Dropped '{col}' from test set")
+        
+        self.logger.info("Tracking columns removed - data ready for model training")
 
     def save_splits(self, output_dir: str) -> str:
         """
@@ -379,7 +488,6 @@ class DataHandler:
         Returns:
             str: Path to the created timestamped subdirectory.
         """
-
         # Generate timestamp for versioning
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
@@ -387,11 +495,15 @@ class DataHandler:
         timestamped_dir = os.path.join(output_dir, timestamp)
         os.makedirs(timestamped_dir, exist_ok=True)
 
+        # Ensure splits exist
+        if self.data_train is None or self.data_test is None or self.labels_train is None or self.labels_test is None:
+            raise ValueError("Data splits not found. Run split_data() before saving.")
+
         # Save each component without timestamp prefix (directory already has it)
-        train_data_path = os.path.join(timestamped_dir, "data_train.parquet")
-        test_data_path = os.path.join(timestamped_dir, "data_test.parquet")
-        train_labels_path = os.path.join(timestamped_dir, "labels_train.parquet")
-        test_labels_path = os.path.join(timestamped_dir, "labels_test.parquet")
+        train_data_path = os.path.join(timestamped_dir, _FILE_TRAIN_DATA)
+        test_data_path = os.path.join(timestamped_dir, _FILE_TEST_DATA)
+        train_labels_path = os.path.join(timestamped_dir, _FILE_TRAIN_LABELS)
+        test_labels_path = os.path.join(timestamped_dir, _FILE_TEST_LABELS)
 
         self.parquet_handler.write_parquet(self.data_train, train_data_path)
         self.parquet_handler.write_parquet(self.data_test, test_data_path)
@@ -406,7 +518,7 @@ class DataHandler:
         
         return timestamped_dir
 
-    def load_splits(self, input_dir: str, timestamp: str = None) -> None:
+    def load_splits(self, input_dir: str, timestamp: Optional[str] = None) -> None:
         """
         Load train/test data and labels from separate parquet files in a timestamped subdirectory.
 
@@ -438,10 +550,10 @@ class DataHandler:
             timestamped_dir = os.path.join(input_dir, timestamp)
 
         # Construct file paths
-        train_data_path = os.path.join(timestamped_dir, "data_train.parquet")
-        test_data_path = os.path.join(timestamped_dir, "data_test.parquet")
-        train_labels_path = os.path.join(timestamped_dir, "labels_train.parquet")
-        test_labels_path = os.path.join(timestamped_dir, "labels_test.parquet")
+        train_data_path = os.path.join(timestamped_dir, _FILE_TRAIN_DATA)
+        test_data_path = os.path.join(timestamped_dir, _FILE_TEST_DATA)
+        train_labels_path = os.path.join(timestamped_dir, _FILE_TRAIN_LABELS)
+        test_labels_path = os.path.join(timestamped_dir, _FILE_TEST_LABELS)
 
         # Verify all files exist
         for path in [train_data_path, test_data_path, train_labels_path, test_labels_path]:
