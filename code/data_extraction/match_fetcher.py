@@ -2,11 +2,13 @@ from data_extraction.requester import Requester
 from data_extraction.schemas import MATCH_SCHEMA, PLAYER_HISTORY_SCHEMA
 from helpers.parquet_handler import ParquetHandler
 from helpers.checkpoint import save_checkpoint, load_checkpoint
+from helpers.master_data_registry import MasterDataRegistry
 
 import os
 import logging
 import pandas as pd
-from typing import Any
+from typing import Any, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
 class MatchFetcher:
@@ -35,7 +37,9 @@ class MatchFetcher:
                  dataframe_target_path: str, 
                  checkpoint_loading_path: str = None,
                  load_percentage: float = 1.0,
-                 random_state: int = 42) -> None:
+                 random_state: int = 42,
+                 master_registry: Optional[MasterDataRegistry] = None,
+                 max_workers: int = 8) -> None:
         """
         Initialize MatchFetcher with API client, logging, and optional checkpoint recovery.
 
@@ -54,6 +58,9 @@ class MatchFetcher:
         self.logger = logger
         self.load_percentage = load_percentage
         self.random_state = random_state
+        self.master_registry = master_registry
+        self.max_workers = max_workers
+        self.backoff_cooldown_counter = 0  # Counter to manage backoff cooldown (allow increase after N iterations)
 
         self.dataframe_target_path = dataframe_target_path
         
@@ -73,6 +80,98 @@ class MatchFetcher:
                 self.final_match_df_list = checkpoint_state.get("final_match_df_list", [])
                 self.final_player_history_df_list = checkpoint_state.get("final_player_history_df_list", [])
                 self.logger.info(f"Resumed from checkpoint: {len(self.processed_matches)} matches already processed")
+
+        # Simple in-memory caches to reduce repeated API calls across matches
+        self._cache_summoner_level: dict[str, Any] = {}
+        self._cache_total_mastery: dict[str, Any] = {}
+        self._cache_rank_entries: dict[str, Any] = {}
+        self._cache_champion_mastery: dict[tuple[str, int], Any] = {}
+        self._cache_kpis_ids: dict[str, list[str]] = {}
+
+    def _process_single_match(self, match_id: str, match_limit_per_player: int = 50) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """
+        Process a single match fetched from the Riot API into structured records.
+        
+        This method extracts match-level and player-level features from raw match data,
+        including draft information, summoner levels, champion masteries, ranks, and historical KPIs.
+        
+        Args:
+            match_id (str): Riot match ID (e.g., 'EUW1_7586168110')
+            match_limit_per_player (int): Number of prior matches per player to fetch for KPI aggregation (default: 50)
+            
+        Returns:
+            tuple[dict, list[dict]]: A tuple containing:
+                - match_record (dict): Single match record with draft and metadata
+                - player_history_records (list[dict]): List of 10 player history records (one per participant)
+        """
+        # Extract pre-features for the match
+        self.logger.info(f"[predict] Fetching pre-features for match {match_id}")
+        match_pre_features = self.fetch_match_pre_features(match_id=match_id)
+        
+        if match_pre_features is None:
+            raise ValueError(f'Unable to fetch match pre-features for match {match_id}')
+        
+        participants = match_pre_features.get("team1_participants") + match_pre_features.get("team2_participants")
+        self.logger.info(f"[predict] Participants fetched: {len(participants)}")
+        
+        # Fetch summoner level for each participant
+        self.logger.info(f"[predict] Fetching summoner levels")
+        summoner_levels = self.fetch_summoner_level_data(participants=participants)
+        self.logger.debug(f'Summoner Levels: {summoner_levels}')
+        
+        # Fetch champion mastery of the champion played in the match for each participant
+        champion_picks = match_pre_features.get("team1_picks") + match_pre_features.get("team2_picks")
+        self.logger.info(f"[predict] Fetching champion masteries for picks")
+        champion_masteries = self.fetch_champion_mastery_data(participants=participants, champion_picks=champion_picks)
+        self.logger.debug(f'Champion Masteries: {champion_masteries}')
+        
+        # Fetch the total mastery score for each participant
+        self.logger.info(f"[predict] Fetching total mastery scores")
+        champion_total_mastery_scores = self.fetch_total_mastery_score(participants=participants)
+        self.logger.debug(f'Total Mastery Scores: {champion_total_mastery_scores}')
+        
+        # Fetch rank queue data for each participant
+        self.logger.info(f"[predict] Fetching rank queue data")
+        rank_queue_data = self.fetch_rank_queue_data(participants=participants)
+        self.logger.debug(f'Rank Queue Data: {rank_queue_data}')
+        
+        # Get raw KPIs for each participant on last N matches before this match
+        current_match_timestamp_creation = match_pre_features.get("game_creation")
+        self.logger.info(f"[predict] Fetching raw player KPIs (limit per player={match_limit_per_player})")
+        kpis_data = self.fetch_raw_player_kpis(
+            participants=participants, 
+            match_limit_per_player=match_limit_per_player, 
+            before_timestamp=current_match_timestamp_creation
+        )
+        self.logger.debug(f'KPIs Data: {kpis_data}')
+        
+        # Create match record with match schema
+        self.logger.info(f"[predict] Creating match record")
+        match_record = self.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
+        
+        # Create player history records
+        self.logger.info(f"[predict] Creating player history records")
+        player_history_records = []
+        for puuid in participants:
+            team_id = 100 if puuid in match_pre_features.get("team1_participants") else 200
+            role = match_pre_features.get("team1_roles")[match_pre_features.get("team1_participants").index(puuid)] if team_id == 100 else match_pre_features.get("team2_roles")[match_pre_features.get("team2_participants").index(puuid)]
+            champion_id = match_pre_features.get("team1_picks")[match_pre_features.get("team1_participants").index(puuid)] if team_id == 100 else match_pre_features.get("team2_picks")[match_pre_features.get("team2_participants").index(puuid)]
+            player_history_record = self.create_player_history_record(
+                match_id=match_id,
+                puuid=puuid,
+                team_id=team_id,
+                role=role,
+                champion_id=champion_id,
+                summoner_level=summoner_levels.get(puuid),
+                champion_mastery=champion_masteries.get(puuid),
+                champion_total_mastery_score=champion_total_mastery_scores.get(puuid),
+                rank_queue_data=rank_queue_data,
+                kpis_data=kpis_data.get(puuid)
+            )
+            player_history_records.append(player_history_record)
+        
+        self.logger.info(f"[predict] Single-match processing complete for {match_id}")
+        return match_record, player_history_records
       
     def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] | None = None, match_limit_per_player: int = 50, checkpoint_save_interval: int = 10) -> None:
         """
@@ -98,6 +197,22 @@ class MatchFetcher:
             self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
         
         match_df = self.parquet_handler.read_parquet(file_path=parquet_path, load_percentage=self.load_percentage)
+
+        # Filter through master registry if available
+        if self.master_registry:
+            initial_count = len(match_df)
+            # Filter out matches already in registry
+            if 'game_version' in match_df.columns:
+                match_df['_composite_key'] = list(zip(match_df['match_id'].astype(str), match_df['game_version'].astype(str)))
+                match_df = match_df[~match_df['_composite_key'].isin(self.master_registry.match_registry.keys())]
+                match_df = match_df.drop(columns=['_composite_key'])
+            else:
+                # If no game_version yet, just filter by match_id (less precise but still helpful)
+                registered_match_ids = {k[0] for k in self.master_registry.match_registry.keys()}
+                match_df = match_df[~match_df['match_id'].isin(registered_match_ids)]
+            
+            filtered_count = initial_count - len(match_df)
+            self.logger.info(f"Registry filter: {len(match_df)} new matches to process, {filtered_count} already in registry")
 
         # Add progress bar for match processing
         total_matches = len(match_df)
@@ -186,6 +301,20 @@ class MatchFetcher:
             checkpoint_counter += 1
             if checkpoint_counter % checkpoint_save_interval == 0 and self.checkpoint_loading_path:
                 self._save_checkpoint()
+            
+            # Check for rate limiting and apply backoff
+            if self.requester.should_backoff(threshold=3):
+                # Rate limit detected: reduce worker count
+                self.max_workers = max(1, self.max_workers // 2)
+                self.logger.warning(f"Rate limit backoff: reduced max_workers to {self.max_workers}")
+                self.backoff_cooldown_counter = 0  # Reset cooldown to require many successful iterations before increase
+            else:
+                # Gradually increase workers back up if we're not hitting rate limits
+                self.backoff_cooldown_counter += 1
+                if self.backoff_cooldown_counter >= 50 and self.max_workers < 8:  # Increase after 50 successful iterations
+                    self.max_workers = min(8, self.max_workers + 1)
+                    self.logger.info(f"Rate limit recovery: increased max_workers to {self.max_workers}")
+                    self.backoff_cooldown_counter = 0
 
         final_match_df = pd.DataFrame(self.final_match_df_list)
         final_player_history_df = pd.DataFrame(self.final_player_history_df_list)
@@ -195,6 +324,20 @@ class MatchFetcher:
 
         self.logger.info(f'Final Player History Dataframe Head: {final_player_history_df.head()}')
         self.logger.info(f'Final Player History Dataframde description: {final_player_history_df.describe()}')
+        
+        # Register matches with master registry if available
+        if self.master_registry and len(final_match_df) > 0:
+            self.logger.info(f"Registering {len(final_match_df)} matches with master registry")
+            collection_metadata = {
+                'source': 'match_fetcher',
+                'match_limit_per_player': match_limit_per_player,
+                'queues': queue
+            }
+            _, duplicates = self.master_registry.register_matches(
+                final_match_df[['match_id', 'game_version']],
+                collection_metadata=collection_metadata
+            )
+            self.logger.info(f"Registry registration complete: {duplicates} duplicates detected")
         
         # suffix with detailed timestamp, number of matches saved, number of matches_per_player
         current_date = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
@@ -356,15 +499,22 @@ class MatchFetcher:
             dict[str, Any]: Mapping of PUUID → summoner level (int).
         """
         
-        summoner_levels = {}
-        for puuid in participants:
+        def _fetch_level(puuid: str) -> tuple[str, Any]:
+            if puuid in self._cache_summoner_level:
+                return puuid, self._cache_summoner_level[puuid]
             summoner_endpoint = f'/lol/summoner/v4/summoners/by-puuid/{puuid}'
-            summoner_data = self.requester.make_request(is_v5=False, endpoint_url=summoner_endpoint)
+            summoner_data = self.requester.make_request(is_v5=False, endpoint_url=summoner_endpoint) or {}
+            level = summoner_data.get("summonerLevel")
+            self._cache_summoner_level[puuid] = level
+            return puuid, level
 
-            summoner_level = summoner_data.get("summonerLevel")
-            self.logger.debug(f'Summoner PUUID: {puuid}, Level: {summoner_level}')
-            summoner_levels[puuid] = summoner_level
-
+        summoner_levels: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(_fetch_level, puuid): puuid for puuid in participants}
+            for future in as_completed(futures):
+                puuid, level = future.result()
+                self.logger.debug(f'Summoner PUUID: {puuid}, Level: {level}')
+                summoner_levels[puuid] = level
         return summoner_levels
     
     def fetch_champion_mastery_data(self, participants: list[str], champion_picks: list[int]) -> dict[str, Any]:
@@ -378,24 +528,26 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Mapping of PUUID → {lastPlayTime, championLevel, championPoints}.
         """
-        champion_masteries = {}
-        
-        for puuid in participants:
-            champion_id = champion_picks[participants.index(puuid)]
-            champion_mastery_endpoint = f'/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/by-champion/{champion_id}'
-            mastery_data = self.requester.make_request(is_v5=False, endpoint_url=champion_mastery_endpoint)
-
-            last_played_time = mastery_data.get("lastPlayTime")
-            champion_level = mastery_data.get("championLevel")
-            champion_points = mastery_data.get("championPoints")
-            
-
-            champion_masteries[puuid] = {
-                "lastPlayTime": last_played_time,
-                "championLevel": champion_level,
-                "championPoints": champion_points
+        def _fetch_mastery(puuid: str, champion_id: int) -> tuple[str, dict[str, Any]]:
+            cache_key = (puuid, champion_id)
+            if cache_key in self._cache_champion_mastery:
+                return puuid, self._cache_champion_mastery[cache_key]
+            endpoint = f'/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/by-champion/{champion_id}'
+            mastery_data = self.requester.make_request(is_v5=False, endpoint_url=endpoint) or {}
+            record = {
+                "lastPlayTime": mastery_data.get("lastPlayTime"),
+                "championLevel": mastery_data.get("championLevel"),
+                "championPoints": mastery_data.get("championPoints")
             }
+            self._cache_champion_mastery[cache_key] = record
+            return puuid, record
 
+        champion_masteries: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(_fetch_mastery, puuid, champion_picks[participants.index(puuid)]): puuid for puuid in participants}
+            for future in as_completed(futures):
+                puuid, record = future.result()
+                champion_masteries[puuid] = record
         return champion_masteries
     
     def fetch_total_mastery_score(self, participants: list[str]) -> dict[str, int]:
@@ -408,13 +560,20 @@ class MatchFetcher:
         Returns:
             dict[str, int]: Mapping of PUUID → total mastery score (int).
         """
-        total_mastery_scores = {}
-        for puuid in participants:
-            total_mastery_endpoint = f'/lol/champion-mastery/v4/scores/by-puuid/{puuid}'
-            total_score = self.requester.make_request(is_v5=False, endpoint_url=total_mastery_endpoint)
+        def _fetch_total_score(puuid: str) -> tuple[str, int]:
+            if puuid in self._cache_total_mastery:
+                return puuid, self._cache_total_mastery[puuid]
+            endpoint = f'/lol/champion-mastery/v4/scores/by-puuid/{puuid}'
+            total_score = self.requester.make_request(is_v5=False, endpoint_url=endpoint)
+            self._cache_total_mastery[puuid] = total_score
+            return puuid, total_score
 
-            total_mastery_scores[puuid] = total_score
-
+        total_mastery_scores: dict[str, int] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(_fetch_total_score, puuid): puuid for puuid in participants}
+            for future in as_completed(futures):
+                puuid, score = future.result()
+                total_mastery_scores[puuid] = score
         return total_mastery_scores
     
     def fetch_rank_queue_data(self, participants: list[str]) -> dict[str, Any]:
@@ -427,39 +586,42 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Mapping of PUUID_solo/PUUID_flex → {tier, rank, leaguePoints, wins, losses, hotStreak}.
         """
-        rank_queue_data = {}
-        for puuid in participants:
-            summoner_endpoint = f'/lol/league/v4/entries/by-puuid/{puuid}'
-            rank_data = self.requester.make_request(is_v5=False, endpoint_url=summoner_endpoint)
+        def _fetch_rank(puuid: str) -> tuple[str, dict[str, Any]]:
+            if puuid in self._cache_rank_entries:
+                return puuid, self._cache_rank_entries[puuid]
+            endpoint = f'/lol/league/v4/entries/by-puuid/{puuid}'
+            rank_data = self.requester.make_request(is_v5=False, endpoint_url=endpoint)
+            self._cache_rank_entries[puuid] = rank_data
+            return puuid, rank_data
 
-            # Guard against None or non-list responses (e.g., API errors)
-            if not isinstance(rank_data, list):
-                self.logger.debug(f'Rank data for {puuid} is not a list: {type(rank_data).__name__}')
-                continue
-
-            # Find the rank data for the RANKED_SOLO_5x5 queue
-            solo_queue_data = next((entry for entry in rank_data if entry.get("queueType") == "RANKED_SOLO_5x5"), None)
-            if solo_queue_data:
-                rank_queue_data[puuid + "_solo"] = {
-                    "tier": solo_queue_data.get("tier"),
-                    "rank": solo_queue_data.get("rank"),
-                    "leaguePoints": solo_queue_data.get("leaguePoints"),
-                    "wins": solo_queue_data.get("wins"),
-                    "losses": solo_queue_data.get("losses"),
-                    "hotStreak": solo_queue_data.get("hotStreak")
-                }
-            
-            flex_queue_data = next((entry for entry in rank_data if entry.get("queueType") == "RANKED_FLEX_SR"), None)
-            if flex_queue_data:
-                rank_queue_data[puuid + "_flex"] = {
-                    "tier": flex_queue_data.get("tier"),
-                    "rank": flex_queue_data.get("rank"),
-                    "leaguePoints": flex_queue_data.get("leaguePoints"),
-                    "wins": flex_queue_data.get("wins"),
-                    "losses": flex_queue_data.get("losses"),
-                    "hotStreak": flex_queue_data.get("hotStreak")
-                }
-
+        rank_queue_data: dict[str, Any] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(_fetch_rank, puuid): puuid for puuid in participants}
+            for future in as_completed(futures):
+                puuid, rank_data = future.result()
+                if not isinstance(rank_data, list):
+                    self.logger.debug(f'Rank data for {puuid} is not a list: {type(rank_data).__name__}')
+                    continue
+                solo_queue_data = next((entry for entry in rank_data if entry.get("queueType") == "RANKED_SOLO_5x5"), None)
+                if solo_queue_data:
+                    rank_queue_data[puuid + "_solo"] = {
+                        "tier": solo_queue_data.get("tier"),
+                        "rank": solo_queue_data.get("rank"),
+                        "leaguePoints": solo_queue_data.get("leaguePoints"),
+                        "wins": solo_queue_data.get("wins"),
+                        "losses": solo_queue_data.get("losses"),
+                        "hotStreak": solo_queue_data.get("hotStreak")
+                    }
+                flex_queue_data = next((entry for entry in rank_data if entry.get("queueType") == "RANKED_FLEX_SR"), None)
+                if flex_queue_data:
+                    rank_queue_data[puuid + "_flex"] = {
+                        "tier": flex_queue_data.get("tier"),
+                        "rank": flex_queue_data.get("rank"),
+                        "leaguePoints": flex_queue_data.get("leaguePoints"),
+                        "wins": flex_queue_data.get("wins"),
+                        "losses": flex_queue_data.get("losses"),
+                        "hotStreak": flex_queue_data.get("hotStreak")
+                    }
         return rank_queue_data
     
     def fetch_raw_player_kpis(self, participants: list[str], match_limit_per_player: int = 50, before_timestamp: int = None) -> dict[str, Any]:
@@ -477,37 +639,41 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Mapping of PUUID → list of match KPI dicts (70+ stat fields per match).
         """
-        kpis_data = {}
-        for puuid in participants:
-            kpis_endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit_per_player}'
+        kpis_data: dict[str, Any] = {}
+
+        def _fetch_kpis_ids(puuid: str) -> tuple[str, list[str]]:
+            if puuid in self._cache_kpis_ids:
+                return puuid, self._cache_kpis_ids[puuid]
+            endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit_per_player}'
             if before_timestamp:
-                kpis_endpoint += f'&endTime={before_timestamp}'
-            kpis_match_ids = self.requester.make_request(is_v5=True, endpoint_url=kpis_endpoint)
+                endpoint += f'&endTime={before_timestamp}'
+            ids = self.requester.make_request(is_v5=True, endpoint_url=endpoint)
+            ids = ids if isinstance(ids, list) else []
+            self._cache_kpis_ids[puuid] = ids
+            return puuid, ids
 
-            # Guard against None or non-list responses (e.g., API errors)
-            if not isinstance(kpis_match_ids, list):
-                self.logger.debug(f'KPI match IDs for {puuid} is not a list: {type(kpis_match_ids).__name__}')
-                continue
-
-            kpis_list = []
-            for kpis_match_id in kpis_match_ids:
-                match_details_endpoint = f'/lol/match/v5/matches/{kpis_match_id}'
-                match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
-
-                # Guard against None or invalid match details
-                if not isinstance(match_details, dict) or not match_details.get("info"):
-                    self.logger.debug(f'Invalid match details for {kpis_match_id}')
+        # Fetch KPI match IDs concurrently per participant
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures_ids = {executor.submit(_fetch_kpis_ids, puuid): puuid for puuid in participants}
+            for future in as_completed(futures_ids):
+                puuid, kpis_match_ids = future.result()
+                if not kpis_match_ids:
+                    self.logger.debug(f'No KPI match IDs for {puuid}')
+                    kpis_data[puuid] = []
                     continue
 
-                participant_data = next((p for p in match_details.get("info").get("participants", []) if p.get("puuid") == puuid), None)
-                if participant_data:
-                    # Extract game duration from match info
+                # Fetch match details for KPI IDs with bounded concurrency
+                def _fetch_match_kpi(kpis_match_id: str) -> Optional[dict[str, Any]]:
+                    match_details_endpoint = f'/lol/match/v5/matches/{kpis_match_id}'
+                    match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
+                    if not isinstance(match_details, dict) or not match_details.get("info"):
+                        self.logger.debug(f'Invalid match details for {kpis_match_id}')
+                        return None
+                    participant_data = next((p for p in match_details.get("info").get("participants", []) if p.get("puuid") == puuid), None)
+                    if not participant_data:
+                        return None
                     game_duration_seconds = match_details.get("info").get("gameDuration", 0)
-                    
-                    self.logger.debug(f'Participant Data for PUUID {puuid} in Match {kpis_match_id}')
-                    
-                    # get relevant kpis
-                    kpis = {
+                    return {
                         "allInPings": participant_data.get("allInPings"),
                         "assistmePings": participant_data.get("assistmePings"),
                         "assists": participant_data.get("assists"),
@@ -583,12 +749,17 @@ class MatchFetcher:
                         "wardKills": participant_data.get("wardKills"),
                         "wardsPlaced": participant_data.get("wardsPlaced"),
                         "win": participant_data.get("win"),
-                        "gameDuration": game_duration_seconds  # Add game duration for per-minute calculations
+                        "gameDuration": game_duration_seconds
                     }
 
-                    kpis_list.append(kpis)
-
-            kpis_data[puuid] = kpis_list
+                kpis_list: list[dict[str, Any]] = []
+                with ThreadPoolExecutor(max_workers=min(self.max_workers, 6)) as exec_matches:
+                    futures_kpi = {exec_matches.submit(_fetch_match_kpi, mid): mid for mid in kpis_match_ids}
+                    for f in as_completed(futures_kpi):
+                        record = f.result()
+                        if record:
+                            kpis_list.append(record)
+                kpis_data[puuid] = kpis_list
 
         return kpis_data
     

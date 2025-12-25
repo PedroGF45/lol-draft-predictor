@@ -61,6 +61,9 @@ class Requester:
         self.headers: dict[str, str] = headers
         self.default_timeout: float = timeout
 
+        # Rate limit tracking for dynamic backoff
+        self.rate_limit_hits: int = 0  # Cumulative 429 error count
+
         # Reuse a single session with retry/backoff to handle transient errors and 429s
         self.session: requests.Session = requests.Session()
         self.session.headers.update(self.headers)
@@ -128,8 +131,9 @@ class Requester:
         elif response.status_code == 404:
             self.logger.warning("Error 404: Not Found. The requested resource may not exist in this region.")
         elif response.status_code == 429:
+            self.rate_limit_hits += 1
             retry_after = response.headers.get("Retry-After")
-            self.logger.warning("Error 429: Rate limited. Retry-After=%s seconds.", retry_after or "unknown")
+            self.logger.warning("Error 429: Rate limited (hit #%d). Retry-After=%s seconds.", self.rate_limit_hits, retry_after or "unknown")
         else:
             self.logger.error("Request failed with status code: %s", response.status_code)
             self.logger.debug("Response content (first 500 chars): %s", response.text[:500])
@@ -152,4 +156,20 @@ class Requester:
             return response.json()
         except ValueError:
             return None
+
+    def should_backoff(self, threshold: int = 3) -> bool:
+        """
+        Check if rate limiting has been detected (≥ threshold hits) and reset counter if true.
+        
+        Args:
+            threshold: Number of 429 hits to trigger backoff. Defaults to 3.
+        
+        Returns:
+            True if rate_limit_hits >= threshold (and counter is reset), False otherwise.
+        """
+        if self.rate_limit_hits >= threshold:
+            self.logger.warning("Rate limit backoff triggered (hits=%d >= threshold=%d). Resetting counter.", self.rate_limit_hits, threshold)
+            self.rate_limit_hits = 0
+            return True
+        return False
     

@@ -1,8 +1,10 @@
 from data_extraction.requester import Requester
 from helpers.checkpoint import save_checkpoint, load_checkpoint
 from helpers.parquet_handler import ParquetHandler
+from helpers.master_data_registry import MasterDataRegistry
 from data_extraction.schemas import PLAYERS_SCHEMA, MATCHES_SCHEMA
-from typing import List
+from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
 import time
 import logging
@@ -10,6 +12,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import os
+from tqdm import tqdm
 
 class InvalidPatientZeroError(Exception):
     """Raised when the provided patient zero account is invalid or not found."""
@@ -41,7 +44,9 @@ class DataMiner():
         patient_zero_game_name: str, 
         patient_zero_tag_line: str,
         checkpoint_loading_path: str = None,
-        checkpoint_save_path: str = None) -> None:
+        checkpoint_save_path: str = None,
+        master_registry: Optional[MasterDataRegistry] = None,
+        max_workers: int = 4) -> None:
         """
         Initialize DataMiner with a patient zero summoner and optional checkpoint recovery.
 
@@ -64,6 +69,9 @@ class DataMiner():
         self.logger = logger
         self.requester = requester
         self.parquet_handler = parquet_handler
+        self.master_registry = master_registry
+        self.max_workers = max_workers
+        self.backoff_cooldown_counter = 0  # Counter to manage backoff cooldown (allow increase after N iterations)
 
         self.raw_data_path = raw_data_path
         self.checkpoint_save_path = checkpoint_save_path
@@ -75,12 +83,14 @@ class DataMiner():
             self.players_queue = deque()
             self.seen_players = set()
             self.seen_matches = set()
+            self._cache_match_players: dict[str, List[str]] = {}
         else:
             checkpoint_state = load_checkpoint(logger=self.logger, path=checkpoint_loading_path)
             self.players_queue = checkpoint_state.get('players_queue')
             self.seen_players = checkpoint_state.get('seen_players')
             self.seen_matches = checkpoint_state.get('seen_matches')
             self.logger.info(f'Loaded:{len(self.players_queue)} for the players queue \n{len(self.seen_players)} for the players set \n{len(self.seen_matches)} for the matches set \n')
+            self._cache_match_players = {}
 
         if not self._is_patient_zero_valid():
             raise InvalidPatientZeroError(
@@ -140,6 +150,18 @@ class DataMiner():
 
         start = time.time()
 
+        # Setup tqdm progress bar based on search mode
+        if search_mode == "matches":
+            target_total = target_number_of_matches
+            current_count = len(self.seen_matches)
+            desc = "Discovering matches"
+        else:  # default to players
+            target_total = target_number_of_players
+            current_count = len(self.seen_players)
+            desc = "Discovering players"
+
+        pbar = tqdm(total=target_total, initial=min(current_count, target_total), desc=desc, unit="items")
+
         while len(self.players_queue) > 0 and not self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
 
             self.logger.info(f'Number of current players: {len(self.seen_players)}\n Number of current matches: {len(self.seen_matches)}')
@@ -147,27 +169,44 @@ class DataMiner():
             player_to_use = self.players_queue.popleft()
             matches_of_player = self.get_last_matches(puuid=player_to_use, number_of_matches=number_of_matches)
 
-            for match in matches_of_player:
-                if self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
-                            break
-                
-                if match not in self.seen_matches:
-                    self.seen_matches.add(match)
+            # Process unseen matches concurrently to speed up discovery
+            unseen_matches = [m for m in matches_of_player if m not in self.seen_matches]
+            for m in unseen_matches:
+                self.seen_matches.add(m)
 
-                    if search_mode == "matches" and len(self.players_queue) >= (len(self.seen_matches) * 8):
-                        continue
+            def _fetch_match_players(mid: str) -> tuple[str, List[str]]:
+                if mid in self._cache_match_players:
+                    return mid, self._cache_match_players[mid]
+                players = self.get_players_from_match(match_id=mid)
+                self._cache_match_players[mid] = players
+                return mid, players
 
-                    new_players = self.get_players_from_match(match_id=match) 
-
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {executor.submit(_fetch_match_players, mid): mid for mid in unseen_matches}
+                for future in as_completed(futures):
+                    if self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
+                        break
+                    _, new_players = future.result()
                     for player in new_players:
                         if self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
                             break
-
                         if player not in self.seen_players:
                             self.seen_players.add(player)
                             self.players_queue.append(player)
 
             self.logger.info(f'Number of players after requests: {len(self.seen_players)}\n Number of matches after requests: {len(self.seen_matches)}')
+
+            # Update progress bar
+            if search_mode == "matches":
+                new_count = len(self.seen_matches)
+            else:
+                new_count = len(self.seen_players)
+            # Clamp to target_total to avoid over-updating
+            delta = max(0, min(new_count, target_total) - min(current_count, target_total))
+            if delta > 0:
+                pbar.update(delta)
+                current_count = new_count
+            pbar.set_postfix(players=len(self.seen_players), matches=len(self.seen_matches), workers=self.max_workers)
 
             checkpoint_dict = {}
             checkpoint_dict["players_queue"] = self.players_queue
@@ -184,9 +223,40 @@ class DataMiner():
                 raise ValueError("checkpoint_save_path must be provided to save checkpoints")
                 
             save_checkpoint(logger=self.logger, state=checkpoint_dict, path=checkpoint_path)
+            
+            # Check for rate limiting and apply backoff
+            if self.requester.should_backoff(threshold=3):
+                # Rate limit detected: reduce worker count
+                self.max_workers = max(1, self.max_workers // 2)
+                self.logger.warning(f"Rate limit backoff: reduced max_workers to {self.max_workers}")
+                self.backoff_cooldown_counter = 0  # Reset cooldown to require many successful iterations before increase
+            else:
+                # Gradually increase workers back up if we're not hitting rate limits
+                self.backoff_cooldown_counter += 1
+                if self.backoff_cooldown_counter >= 30 and self.max_workers < 4:  # Increase after 30 successful iterations
+                    self.max_workers = min(4, self.max_workers + 1)
+                    self.logger.info(f"Rate limit recovery: increased max_workers to {self.max_workers}")
+                    self.backoff_cooldown_counter = 0
 
         players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players, mode="players")
         matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches, mode="matches")
+        #Filter through master registry if available to avoid duplicates
+        if self.master_registry:
+            self.logger.info(f"Filtering {len(matches_dataframe)} matches through master registry")
+            # Note: DataMiner only has match_ids, not game_versions yet
+            # The registry will track these matches, and MatchFetcher will add game_version
+            collection_metadata = {
+                'source': 'data_miner',
+                'search_mode': search_mode,
+                'patient_zero': f"{self.patient_zero_game_name}#{self.patient_zero_tag_line}"
+            }
+            # We'll pass game_version as 'pending' here since we don't have it yet
+            matches_dataframe['game_version'] = 'pending'
+            matches_dataframe, duplicates = self.master_registry.register_matches(
+                matches_dataframe, 
+                collection_metadata=collection_metadata
+            )
+            self.logger.info(f"After registry filter: {len(matches_dataframe)} new matches, {duplicates} duplicates skipped")
 
         # suffix with detailed timestamp and number of players/matches saved
         current_date = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
@@ -197,6 +267,14 @@ class DataMiner():
         match_prefix = f'{current_date}_{len(matches_dataframe)}_matches'
         match_data_path = os.path.join(self.raw_data_path, f"exploration\\matches\\{match_prefix}.parquet")
         self.parquet_handler.write_parquet(data=matches_dataframe, file_path=match_data_path)
+
+        # Ensure progress bar completes and closes
+        try:
+            # Force to 100% if we reached or exceeded the target
+            if current_count < target_total:
+                pbar.update(target_total - current_count)
+        finally:
+            pbar.close()
 
         end = time.time()
         self.logger.info(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
