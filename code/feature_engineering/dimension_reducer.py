@@ -119,15 +119,19 @@ class DimensionReducer:
         if verbose:
             self.logger.info(f"Determined n_components={n_components} to achieve {explain_percentage * 100}% variance")
 
+        # Record input feature names used for PCA
+        self.pca_input_features = list(data_train.columns)
+
         # Fit PCA with determined components
         self.pca_model = PCA(n_components=n_components, random_state=self.random_state)
         train_pca = self.pca_model.fit_transform(data_train)
         test_pca = self.pca_model.transform(data_test)
 
         # Normalize PCA results
-        scaler = StandardScaler()
-        train_pca_scaled = scaler.fit_transform(train_pca)
-        test_pca_scaled = scaler.transform(test_pca)
+        # Scale PCA outputs and persist scaler
+        self.pca_output_scaler = StandardScaler()
+        train_pca_scaled = self.pca_output_scaler.fit_transform(train_pca)
+        test_pca_scaled = self.pca_output_scaler.transform(test_pca)
 
         # Create PCA component names
         pca_columns = [f"pca_component_{i+1}" for i in range(n_components)]
