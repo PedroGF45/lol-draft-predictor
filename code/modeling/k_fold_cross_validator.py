@@ -12,9 +12,16 @@ from typing import Dict, Tuple, Optional, Any
 
 from sklearn.model_selection import KFold
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score, roc_auc_score,
-    confusion_matrix, classification_report,
-    mean_squared_error, mean_absolute_error, r2_score,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    confusion_matrix,
+    classification_report,
+    mean_squared_error,
+    mean_absolute_error,
+    r2_score,
 )
 
 warnings.filterwarnings("ignore")
@@ -23,7 +30,7 @@ warnings.filterwarnings("ignore")
 class KFoldCrossValidator:
     """
     Performs k-fold cross-validation with comprehensive metrics.
-    
+
     Supports both classification and regression tasks with detailed metric calculation,
     including mean and standard deviation across folds.
     """
@@ -38,7 +45,7 @@ class KFoldCrossValidator:
     ):
         """
         Initialize K-Fold Cross Validator.
-        
+
         Args:
             k: Number of folds (must be >= 2)
             is_classification: True for classification, False for regression
@@ -63,9 +70,7 @@ class KFoldCrossValidator:
         logger = logging.getLogger("KFoldCrossValidator")
         if not logger.handlers:
             handler = logging.StreamHandler()
-            handler.setFormatter(
-                logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            )
+            handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
         return logger
@@ -94,12 +99,12 @@ class KFoldCrossValidator:
     ) -> Tuple[Any, Dict[str, Tuple[float, float]]]:
         """
         Perform k-fold cross-validation.
-        
+
         Args:
             model: Scikit-learn compatible model with fit() and predict()
             X: Features (n_samples, n_features)
             y: Labels
-        
+
         Returns:
             Tuple of (fitted_model, summary_metrics_dict)
             summary_metrics_dict: {metric_name: (mean, std), ...}
@@ -118,10 +123,7 @@ class KFoldCrossValidator:
             y_train, y_val = y[train_idx], y[val_idx]
 
             if self.verbose:
-                self.logger.info(
-                    f"  Train: {X_train.shape[0]} samples | "
-                    f"Val: {X_val.shape[0]} samples"
-                )
+                self.logger.info(f"  Train: {X_train.shape[0]} samples | " f"Val: {X_val.shape[0]} samples")
 
             # Train model
             start_time = time.time()
@@ -145,9 +147,9 @@ class KFoldCrossValidator:
         summary_metrics = self._compute_summary_metrics()
 
         if self.verbose:
-            self.logger.info("\n" + "="*60)
+            self.logger.info("\n" + "=" * 60)
             self.logger.info("Cross-Validation Summary")
-            self.logger.info("="*60)
+            self.logger.info("=" * 60)
             for metric, (mean, std) in summary_metrics.items():
                 self.logger.info(f"  {metric}: {mean:.4f} ± {std:.4f}")
 
@@ -258,11 +260,11 @@ class KFoldCrossValidator:
     ) -> Dict[str, float]:
         """
         Evaluate predictions on test set.
-        
+
         Args:
             y_pred: Predicted labels
             y_test: Ground truth labels
-        
+
         Returns:
             Dictionary of test metrics
         """

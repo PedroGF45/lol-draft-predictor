@@ -18,8 +18,14 @@ from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime
 
 from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score, confusion_matrix,
-    mean_squared_error, mean_absolute_error, r2_score,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    mean_squared_error,
+    mean_absolute_error,
+    r2_score,
 )
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -36,7 +42,7 @@ DEFAULT_LAYER_CONFIG: List[Tuple[int, float]] = [
 class DeepLearningModel(nn.Module, ABC):
     """
     Abstract base class for deep learning models.
-    
+
     Provides framework for building, training, evaluating, and visualizing
     PyTorch-based neural networks for draft prediction.
     """
@@ -54,7 +60,7 @@ class DeepLearningModel(nn.Module, ABC):
     ):
         """
         Initialize DeepLearningModel.
-        
+
         Args:
             input_dim: Number of input features
             num_outputs: Number of output units (classes for classifier, 1 for regressor)
@@ -107,9 +113,7 @@ class DeepLearningModel(nn.Module, ABC):
         logger = logging.getLogger("DeepLearningModel")
         if not logger.handlers:
             handler = logging.StreamHandler()
-            handler.setFormatter(
-                logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            )
+            handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
         return logger
@@ -160,10 +164,10 @@ class DeepLearningModel(nn.Module, ABC):
         # Convert to tensors
         X_train_tensor = torch.FloatTensor(X_train).to(self.device)
         X_val_tensor = torch.FloatTensor(X_val).to(self.device)
-        
+
         # For classification: labels should be 1D LongTensor (class indices)
         # For regression: labels should be 2D FloatTensor (predictions)
-        if hasattr(self, 'num_classes'):  # Classification (DeepLearningClassifier)
+        if hasattr(self, "num_classes"):  # Classification (DeepLearningClassifier)
             y_train_tensor = torch.LongTensor(y_train.astype(np.int64)).to(self.device)
             y_val_tensor = torch.LongTensor(y_val.astype(np.int64)).to(self.device)
         else:  # Regression (DeepLearningRegressor)
@@ -203,7 +207,7 @@ class DeepLearningModel(nn.Module, ABC):
     ) -> Dict[str, List[float]]:
         """
         Train the model.
-        
+
         Args:
             X_train: Training features
             y_train: Training labels
@@ -215,7 +219,7 @@ class DeepLearningModel(nn.Module, ABC):
             criterion_name: Loss function name (set by subclass if None)
             early_stopping_patience: Patience for early stopping
             early_stopping_min_delta: Minimum improvement for early stopping
-        
+
         Returns:
             Training history dictionary
         """
@@ -253,8 +257,7 @@ class DeepLearningModel(nn.Module, ABC):
 
             if self.verbose and (epoch + 1) % max(1, num_epochs // 10) == 0:
                 self.logger.info(
-                    f"Epoch {epoch + 1}/{num_epochs} | "
-                    f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
+                    f"Epoch {epoch + 1}/{num_epochs} | " f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}"
                 )
 
             # Early stopping
@@ -264,9 +267,7 @@ class DeepLearningModel(nn.Module, ABC):
                 early_stopping_min_delta,
             ):
                 if self.verbose:
-                    self.logger.info(
-                        f"Early stopping triggered at epoch {epoch + 1}"
-                    )
+                    self.logger.info(f"Early stopping triggered at epoch {epoch + 1}")
                 break
 
         # Load best model
@@ -440,7 +441,7 @@ class DeepLearningClassifier(DeepLearningModel):
     ):
         """
         Initialize classifier.
-        
+
         Args:
             input_dim: Number of input features
             num_classes: Number of output classes
@@ -513,7 +514,7 @@ class DeepLearningRegressor(DeepLearningModel):
     ):
         """
         Initialize regressor.
-        
+
         Args:
             input_dim: Number of input features
         """

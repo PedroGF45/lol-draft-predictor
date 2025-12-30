@@ -11,6 +11,7 @@ class ParquetHandler:
         logger (Logger): Logger for status and error messages.
         random_state (int): Seed used when sampling a percentage of rows.
     """
+
     def __init__(self, logger: Logger, random_state: int = 42) -> None:
         """
         Initialize the parquet handler.
@@ -83,7 +84,7 @@ class ParquetHandler:
         else:
             self.logger.warning(f"Directory does not exist: {dir_path}")
         return exists
-    
+
     def create_directory(self, dir_path: str) -> None:
         """
         Create a directory if it does not exist.

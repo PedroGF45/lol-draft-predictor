@@ -11,6 +11,7 @@ from typing import Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 
+
 class MatchFetcher:
     """
     Fetches and enriches match data from the Riot API, combining match details with player historical KPIs.
@@ -30,16 +31,18 @@ class MatchFetcher:
         final_player_history_df_list (list): Accumulated player history records (10 per match).
     """
 
-    def __init__(self, 
-                 requester: Requester, 
-                 logger: logging.Logger, 
-                 parquet_handler: ParquetHandler, 
-                 dataframe_target_path: str, 
-                 checkpoint_loading_path: str = None,
-                 load_percentage: float = 1.0,
-                 random_state: int = 42,
-                 master_registry: Optional[MasterDataRegistry] = None,
-                 max_workers: int = 8) -> None:
+    def __init__(
+        self,
+        requester: Requester,
+        logger: logging.Logger,
+        parquet_handler: ParquetHandler,
+        dataframe_target_path: str,
+        checkpoint_loading_path: str = None,
+        load_percentage: float = 1.0,
+        random_state: int = 42,
+        master_registry: Optional[MasterDataRegistry] = None,
+        max_workers: int = 8,
+    ) -> None:
         """
         Initialize MatchFetcher with API client, logging, and optional checkpoint recovery.
 
@@ -52,7 +55,7 @@ class MatchFetcher:
             load_percentage (float, optional): Percentage of data to load from parquet. Defaults to 1.0.
             random_state (int, optional): Random seed for reproducibility. Defaults to 42.
         """
-        
+
         self.requester = requester
         self.parquet_handler = parquet_handler
         self.logger = logger
@@ -63,16 +66,16 @@ class MatchFetcher:
         self.backoff_cooldown_counter = 0  # Counter to manage backoff cooldown (allow increase after N iterations)
 
         self.dataframe_target_path = dataframe_target_path
-        
+
         if not self.parquet_handler.check_directory_exists(self.dataframe_target_path):
             self.parquet_handler.create_directory(self.dataframe_target_path)
-        
+
         # Initialize checkpoint state
         self.checkpoint_loading_path = checkpoint_loading_path
         self.processed_matches = set()
         self.final_match_df_list = []
         self.final_player_history_df_list = []
-        
+
         if checkpoint_loading_path and os.path.exists(checkpoint_loading_path):
             checkpoint_state = load_checkpoint(logger=self.logger, path=checkpoint_loading_path)
             if checkpoint_state:
@@ -88,17 +91,19 @@ class MatchFetcher:
         self._cache_champion_mastery: dict[tuple[str, int], Any] = {}
         self._cache_kpis_ids: dict[str, list[str]] = {}
 
-    def _process_single_match(self, match_id: str, match_limit_per_player: int = 50) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def _process_single_match(
+        self, match_id: str, match_limit_per_player: int = 50
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         """
         Process a single match fetched from the Riot API into structured records.
-        
+
         This method extracts match-level and player-level features from raw match data,
         including draft information, summoner levels, champion masteries, ranks, and historical KPIs.
-        
+
         Args:
             match_id (str): Riot match ID (e.g., 'EUW1_7586168110')
             match_limit_per_player (int): Number of prior matches per player to fetch for KPI aggregation (default: 50)
-            
+
         Returns:
             tuple[dict, list[dict]]: A tuple containing:
                 - match_record (dict): Single match record with draft and metadata
@@ -107,55 +112,63 @@ class MatchFetcher:
         # Extract pre-features for the match
         self.logger.info(f"[predict] Fetching pre-features for match {match_id}")
         match_pre_features = self.fetch_match_pre_features(match_id=match_id)
-        
+
         if match_pre_features is None:
-            raise ValueError(f'Unable to fetch match pre-features for match {match_id}')
-        
+            raise ValueError(f"Unable to fetch match pre-features for match {match_id}")
+
         participants = match_pre_features.get("team1_participants") + match_pre_features.get("team2_participants")
         self.logger.info(f"[predict] Participants fetched: {len(participants)}")
-        
+
         # Fetch summoner level for each participant
         self.logger.info(f"[predict] Fetching summoner levels")
         summoner_levels = self.fetch_summoner_level_data(participants=participants)
-        self.logger.debug(f'Summoner Levels: {summoner_levels}')
-        
+        self.logger.debug(f"Summoner Levels: {summoner_levels}")
+
         # Fetch champion mastery of the champion played in the match for each participant
         champion_picks = match_pre_features.get("team1_picks") + match_pre_features.get("team2_picks")
         self.logger.info(f"[predict] Fetching champion masteries for picks")
         champion_masteries = self.fetch_champion_mastery_data(participants=participants, champion_picks=champion_picks)
-        self.logger.debug(f'Champion Masteries: {champion_masteries}')
-        
+        self.logger.debug(f"Champion Masteries: {champion_masteries}")
+
         # Fetch the total mastery score for each participant
         self.logger.info(f"[predict] Fetching total mastery scores")
         champion_total_mastery_scores = self.fetch_total_mastery_score(participants=participants)
-        self.logger.debug(f'Total Mastery Scores: {champion_total_mastery_scores}')
-        
+        self.logger.debug(f"Total Mastery Scores: {champion_total_mastery_scores}")
+
         # Fetch rank queue data for each participant
         self.logger.info(f"[predict] Fetching rank queue data")
         rank_queue_data = self.fetch_rank_queue_data(participants=participants)
-        self.logger.debug(f'Rank Queue Data: {rank_queue_data}')
-        
+        self.logger.debug(f"Rank Queue Data: {rank_queue_data}")
+
         # Get raw KPIs for each participant on last N matches before this match
         current_match_timestamp_creation = match_pre_features.get("game_creation")
         self.logger.info(f"[predict] Fetching raw player KPIs (limit per player={match_limit_per_player})")
         kpis_data = self.fetch_raw_player_kpis(
-            participants=participants, 
-            match_limit_per_player=match_limit_per_player, 
-            before_timestamp=current_match_timestamp_creation
+            participants=participants,
+            match_limit_per_player=match_limit_per_player,
+            before_timestamp=current_match_timestamp_creation,
         )
-        self.logger.debug(f'KPIs Data: {kpis_data}')
-        
+        self.logger.debug(f"KPIs Data: {kpis_data}")
+
         # Create match record with match schema
         self.logger.info(f"[predict] Creating match record")
         match_record = self.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
-        
+
         # Create player history records
         self.logger.info(f"[predict] Creating player history records")
         player_history_records = []
         for puuid in participants:
             team_id = 100 if puuid in match_pre_features.get("team1_participants") else 200
-            role = match_pre_features.get("team1_roles")[match_pre_features.get("team1_participants").index(puuid)] if team_id == 100 else match_pre_features.get("team2_roles")[match_pre_features.get("team2_participants").index(puuid)]
-            champion_id = match_pre_features.get("team1_picks")[match_pre_features.get("team1_participants").index(puuid)] if team_id == 100 else match_pre_features.get("team2_picks")[match_pre_features.get("team2_participants").index(puuid)]
+            role = (
+                match_pre_features.get("team1_roles")[match_pre_features.get("team1_participants").index(puuid)]
+                if team_id == 100
+                else match_pre_features.get("team2_roles")[match_pre_features.get("team2_participants").index(puuid)]
+            )
+            champion_id = (
+                match_pre_features.get("team1_picks")[match_pre_features.get("team1_participants").index(puuid)]
+                if team_id == 100
+                else match_pre_features.get("team2_picks")[match_pre_features.get("team2_participants").index(puuid)]
+            )
             player_history_record = self.create_player_history_record(
                 match_id=match_id,
                 puuid=puuid,
@@ -166,14 +179,21 @@ class MatchFetcher:
                 champion_mastery=champion_masteries.get(puuid),
                 champion_total_mastery_score=champion_total_mastery_scores.get(puuid),
                 rank_queue_data=rank_queue_data,
-                kpis_data=kpis_data.get(puuid)
+                kpis_data=kpis_data.get(puuid),
             )
             player_history_records.append(player_history_record)
-        
+
         self.logger.info(f"[predict] Single-match processing complete for {match_id}")
         return match_record, player_history_records
-      
-    def fetch_match_data(self, parquet_path: str, keep_remakes: bool = False, queue: list[int] | None = None, match_limit_per_player: int = 50, checkpoint_save_interval: int = 10) -> None:
+
+    def fetch_match_data(
+        self,
+        parquet_path: str,
+        keep_remakes: bool = False,
+        queue: list[int] | None = None,
+        match_limit_per_player: int = 50,
+        checkpoint_save_interval: int = 10,
+    ) -> None:
         """
         Orchestrate the enrichment pipeline: fetch match details, player state, and KPIs for all matches.
 
@@ -194,56 +214,64 @@ class MatchFetcher:
             queue = [420, 440]
 
         if not os.path.exists(parquet_path):
-            self.logger.error(f'Parquet path must be a valid path but got {parquet_path}')
-        
+            self.logger.error(f"Parquet path must be a valid path but got {parquet_path}")
+
         match_df = self.parquet_handler.read_parquet(file_path=parquet_path, load_percentage=self.load_percentage)
 
         # Filter through master registry if available
         if self.master_registry:
             initial_count = len(match_df)
             # Filter out matches already in registry
-            if 'game_version' in match_df.columns:
-                match_df['_composite_key'] = list(zip(match_df['match_id'].astype(str), match_df['game_version'].astype(str)))
-                match_df = match_df[~match_df['_composite_key'].isin(self.master_registry.match_registry.keys())]
-                match_df = match_df.drop(columns=['_composite_key'])
+            if "game_version" in match_df.columns:
+                match_df["_composite_key"] = list(
+                    zip(match_df["match_id"].astype(str), match_df["game_version"].astype(str))
+                )
+                match_df = match_df[~match_df["_composite_key"].isin(self.master_registry.match_registry.keys())]
+                match_df = match_df.drop(columns=["_composite_key"])
             else:
                 # If no game_version yet, just filter by match_id (less precise but still helpful)
                 registered_match_ids = {k[0] for k in self.master_registry.match_registry.keys()}
-                match_df = match_df[~match_df['match_id'].isin(registered_match_ids)]
-            
+                match_df = match_df[~match_df["match_id"].isin(registered_match_ids)]
+
             filtered_count = initial_count - len(match_df)
-            self.logger.info(f"Registry filter: {len(match_df)} new matches to process, {filtered_count} already in registry")
+            self.logger.info(
+                f"Registry filter: {len(match_df)} new matches to process, {filtered_count} already in registry"
+            )
 
         # Add progress bar for match processing
         total_matches = len(match_df)
-        self.logger.info(f'Processing {total_matches} matches...')
-        
+        self.logger.info(f"Processing {total_matches} matches...")
+
         checkpoint_counter = 0
-        for match_id in tqdm(match_df.itertuples(index=False), total=total_matches, desc="Processing matches", unit="match"):
+        for match_id in tqdm(
+            match_df.itertuples(index=False), total=total_matches, desc="Processing matches", unit="match"
+        ):
             match_id = match_id.match_id
-            
+
             # Skip already-processed matches
             if match_id in self.processed_matches:
-                self.logger.debug(f'Skipping already-processed match: {match_id}')
+                self.logger.debug(f"Skipping already-processed match: {match_id}")
                 continue
-            
+
             # fetch match details
             match_pre_features = self.fetch_match_pre_features(match_id=match_id)
 
             if match_pre_features is None:
-                self.logger.info(f'Skipping match {match_id} due to incomplete data')
+                self.logger.info(f"Skipping match {match_id} due to incomplete data")
                 self.processed_matches.add(match_id)
                 continue
 
             # check if game is a remake
             if not keep_remakes and match_pre_features.get("game_duration") < 300:
-                self.logger.info(f'Skipping remake match: {match_id}')
+                self.logger.info(f"Skipping remake match: {match_id}")
                 self.processed_matches.add(match_id)
                 continue
 
             # filter by queue
             if match_pre_features.get("queue_id") not in queue:
-                self.logger.info(f'Skipping match {match_id} due to queue filter. Queue ID: {match_pre_features.get("queue_id")}')
+                self.logger.info(
+                    f'Skipping match {match_id} due to queue filter. Queue ID: {match_pre_features.get("queue_id")}'
+                )
                 self.processed_matches.add(match_id)
                 continue
 
@@ -251,25 +279,31 @@ class MatchFetcher:
 
             # Fetch summoner level for each participant
             summoner_levels = self.fetch_summoner_level_data(participants=participants)
-            self.logger.debug(f'Summoner Levels: {summoner_levels}')
+            self.logger.debug(f"Summoner Levels: {summoner_levels}")
 
             # fetch champion mastery of the champion played in the match for each participant
             champion_picks = match_pre_features.get("team1_picks") + match_pre_features.get("team2_picks")
-            champion_masteries = self.fetch_champion_mastery_data(participants=participants, champion_picks=champion_picks)
-            self.logger.debug(f'Champion Masteries: {champion_masteries}')
+            champion_masteries = self.fetch_champion_mastery_data(
+                participants=participants, champion_picks=champion_picks
+            )
+            self.logger.debug(f"Champion Masteries: {champion_masteries}")
 
             # fetch the total mastery score for each participant
             champion_total_mastery_scores = self.fetch_total_mastery_score(participants=participants)
-            self.logger.debug(f'Total Mastery Scores: {champion_total_mastery_scores}')
+            self.logger.debug(f"Total Mastery Scores: {champion_total_mastery_scores}")
 
             # fetch rank queue data for each participant
             rank_queue_data = self.fetch_rank_queue_data(participants=participants)
-            self.logger.debug(f'Rank Queue Data: {rank_queue_data}')
+            self.logger.debug(f"Rank Queue Data: {rank_queue_data}")
 
             # get raw kpis for each participant on last N matches before this match
             current_match_timestamp_creation = match_pre_features.get("game_creation")
-            kpis_data = self.fetch_raw_player_kpis(participants=participants, match_limit_per_player=match_limit_per_player, before_timestamp=current_match_timestamp_creation)
-            self.logger.debug(f'KPIs Data: {kpis_data}')
+            kpis_data = self.fetch_raw_player_kpis(
+                participants=participants,
+                match_limit_per_player=match_limit_per_player,
+                before_timestamp=current_match_timestamp_creation,
+            )
+            self.logger.debug(f"KPIs Data: {kpis_data}")
 
             # create match record with match schema
             match_record = self.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
@@ -278,8 +312,20 @@ class MatchFetcher:
             # create player history records
             for puuid in participants:
                 team_id = 100 if puuid in match_pre_features.get("team1_participants") else 200
-                role = match_pre_features.get("team1_roles")[match_pre_features.get("team1_participants").index(puuid)] if team_id == 100 else match_pre_features.get("team2_roles")[match_pre_features.get("team2_participants").index(puuid)]
-                champion_id = match_pre_features.get("team1_picks")[match_pre_features.get("team1_participants").index(puuid)] if team_id == 100 else match_pre_features.get("team2_picks")[match_pre_features.get("team2_participants").index(puuid)]
+                role = (
+                    match_pre_features.get("team1_roles")[match_pre_features.get("team1_participants").index(puuid)]
+                    if team_id == 100
+                    else match_pre_features.get("team2_roles")[
+                        match_pre_features.get("team2_participants").index(puuid)
+                    ]
+                )
+                champion_id = (
+                    match_pre_features.get("team1_picks")[match_pre_features.get("team1_participants").index(puuid)]
+                    if team_id == 100
+                    else match_pre_features.get("team2_picks")[
+                        match_pre_features.get("team2_participants").index(puuid)
+                    ]
+                )
                 player_history_record = self.create_player_history_record(
                     match_id=match_id,
                     puuid=puuid,
@@ -290,28 +336,32 @@ class MatchFetcher:
                     champion_mastery=champion_masteries.get(puuid),
                     champion_total_mastery_score=champion_total_mastery_scores.get(puuid),
                     rank_queue_data=rank_queue_data,
-                    kpis_data=kpis_data.get(puuid)
+                    kpis_data=kpis_data.get(puuid),
                 )
                 self.final_player_history_df_list.append(player_history_record)
-            
+
             # Mark match as processed
             self.processed_matches.add(match_id)
-            
+
             # Periodically save checkpoint
             checkpoint_counter += 1
             if checkpoint_counter % checkpoint_save_interval == 0 and self.checkpoint_loading_path:
                 self._save_checkpoint()
-            
+
             # Check for rate limiting and apply backoff
             if self.requester.should_backoff(threshold=3):
                 # Rate limit detected: reduce worker count
                 self.max_workers = max(1, self.max_workers // 2)
                 self.logger.warning(f"Rate limit backoff: reduced max_workers to {self.max_workers}")
-                self.backoff_cooldown_counter = 0  # Reset cooldown to require many successful iterations before increase
+                self.backoff_cooldown_counter = (
+                    0  # Reset cooldown to require many successful iterations before increase
+                )
             else:
                 # Gradually increase workers back up if we're not hitting rate limits
                 self.backoff_cooldown_counter += 1
-                if self.backoff_cooldown_counter >= 50 and self.max_workers < 8:  # Increase after 50 successful iterations
+                if (
+                    self.backoff_cooldown_counter >= 50 and self.max_workers < 8
+                ):  # Increase after 50 successful iterations
                     self.max_workers = min(8, self.max_workers + 1)
                     self.logger.info(f"Rate limit recovery: increased max_workers to {self.max_workers}")
                     self.backoff_cooldown_counter = 0
@@ -319,44 +369,43 @@ class MatchFetcher:
         final_match_df = pd.DataFrame(self.final_match_df_list)
         final_player_history_df = pd.DataFrame(self.final_player_history_df_list)
 
-        self.logger.info(f'Final Dataframe Head: {final_match_df.head()}')
-        self.logger.info(f'Final Dataframde description: {final_match_df.describe()}')
+        self.logger.info(f"Final Dataframe Head: {final_match_df.head()}")
+        self.logger.info(f"Final Dataframde description: {final_match_df.describe()}")
 
-        self.logger.info(f'Final Player History Dataframe Head: {final_player_history_df.head()}')
-        self.logger.info(f'Final Player History Dataframde description: {final_player_history_df.describe()}')
-        
+        self.logger.info(f"Final Player History Dataframe Head: {final_player_history_df.head()}")
+        self.logger.info(f"Final Player History Dataframde description: {final_player_history_df.describe()}")
+
         # Register matches with master registry if available
         if self.master_registry and len(final_match_df) > 0:
             self.logger.info(f"Registering {len(final_match_df)} matches with master registry")
             collection_metadata = {
-                'source': 'match_fetcher',
-                'match_limit_per_player': match_limit_per_player,
-                'queues': queue
+                "source": "match_fetcher",
+                "match_limit_per_player": match_limit_per_player,
+                "queues": queue,
             }
             _, duplicates = self.master_registry.register_matches(
-                final_match_df[['match_id', 'game_version']],
-                collection_metadata=collection_metadata
+                final_match_df[["match_id", "game_version"]], collection_metadata=collection_metadata
             )
             self.logger.info(f"Registry registration complete: {duplicates} duplicates detected")
-        
-        # suffix with detailed timestamp, number of matches saved, number of matches_per_player
-        current_date = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-        match_path_sufix = f'{current_date}_{len(final_match_df)}_matches_{match_limit_per_player}_players_per_match'
-        match_output_path = os.path.join(self.dataframe_target_path, "matches", f'{match_path_sufix}.parquet')
-        self.parquet_handler.write_parquet(data=final_match_df, file_path=match_output_path)
-        self.logger.info(f'Match Dataframe saved to {match_output_path}')
 
-        player_history_output_path = os.path.join(self.dataframe_target_path, "players", f'{match_path_sufix}.parquet')
+        # suffix with detailed timestamp, number of matches saved, number of matches_per_player
+        current_date = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+        match_path_sufix = f"{current_date}_{len(final_match_df)}_matches_{match_limit_per_player}_players_per_match"
+        match_output_path = os.path.join(self.dataframe_target_path, "matches", f"{match_path_sufix}.parquet")
+        self.parquet_handler.write_parquet(data=final_match_df, file_path=match_output_path)
+        self.logger.info(f"Match Dataframe saved to {match_output_path}")
+
+        player_history_output_path = os.path.join(self.dataframe_target_path, "players", f"{match_path_sufix}.parquet")
         self.parquet_handler.write_parquet(data=final_player_history_df, file_path=player_history_output_path)
-        self.logger.info(f'Player History Dataframe saved to {player_history_output_path}')
-        
+        self.logger.info(f"Player History Dataframe saved to {player_history_output_path}")
+
         # Clear checkpoint after successful completion
         if self.checkpoint_loading_path and os.path.exists(self.checkpoint_loading_path):
             try:
                 os.remove(self.checkpoint_loading_path)
-                self.logger.info('Checkpoint cleared after successful completion')
+                self.logger.info("Checkpoint cleared after successful completion")
             except Exception as e:
-                self.logger.warning(f'Failed to clear checkpoint: {e}')
+                self.logger.warning(f"Failed to clear checkpoint: {e}")
 
     def _save_checkpoint(self) -> None:
         """
@@ -365,7 +414,7 @@ class MatchFetcher:
         Allows the pipeline to resume from the exact point of interruption without reprocessing.
         """
         if not self.checkpoint_loading_path:
-            self.logger.warning('Checkpoint loading path not set; skipping checkpoint save.')
+            self.logger.warning("Checkpoint loading path not set; skipping checkpoint save.")
             return
 
         checkpoint_dir = (
@@ -375,14 +424,14 @@ class MatchFetcher:
         )
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-        timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         checkpoint_filename = f"{timestamp}_{len(self.processed_matches)}_matches_checkpoint.pkl"
         checkpoint_path = os.path.join(checkpoint_dir, checkpoint_filename)
 
         checkpoint_state = {
             "processed_matches": self.processed_matches,
             "final_match_df_list": self.final_match_df_list,
-            "final_player_history_df_list": self.final_player_history_df_list
+            "final_player_history_df_list": self.final_player_history_df_list,
         }
         save_checkpoint(logger=self.logger, state=checkpoint_state, path=checkpoint_path)
 
@@ -397,43 +446,51 @@ class MatchFetcher:
             match_id (str): Riot match ID (e.g., 'EUW1_7586168110').
 
         Returns:
-            dict[str, Any]: Match features including game metadata, bans, picks, team roles, and outcome. 
+            dict[str, Any]: Match features including game metadata, bans, picks, team roles, and outcome.
                            Returns None if match data is invalid or incomplete (e.g., missing teams).
         """
-        
-        match_details_endpoint = f'/lol/match/v5/matches/{match_id}'
+
+        match_details_endpoint = f"/lol/match/v5/matches/{match_id}"
         match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
 
         # Guard against invalid or missing match details
         if not isinstance(match_details, dict) or not match_details.get("metadata") or not match_details.get("info"):
-            self.logger.info(f'Skipping match {match_id} due to invalid match details response')
+            self.logger.info(f"Skipping match {match_id} due to invalid match details response")
             return None
 
-        data_version = match_details.get("metadata").get("dataVersion") # version of the data schema
-        game_creation = match_details.get("info").get("gameCreation") # timestamp of game creation
-        game_duration = match_details.get("info").get("gameDuration") # in seconds
-        game_mode = match_details.get("info").get("gameMode") # CLASSIC, ARAM, URF, DOOMBOTSTEEMO, ONEFORALL5x5, ASCENSION, etc
-        game_type = match_details.get("info").get("gameType") # MATCHED_GAME, CUSTOM_GAME
-        queue_id = match_details.get("info").get("queueId") #420, 430, 440, 450, 700, 720, 900, 910, 920, 940, 950, 960
-        game_version = match_details.get("info").get("gameVersion") #11.18.387.1024
-        platform_id = match_details.get("info").get("platformId") #EUW1
+        data_version = match_details.get("metadata").get("dataVersion")  # version of the data schema
+        game_creation = match_details.get("info").get("gameCreation")  # timestamp of game creation
+        game_duration = match_details.get("info").get("gameDuration")  # in seconds
+        game_mode = match_details.get("info").get(
+            "gameMode"
+        )  # CLASSIC, ARAM, URF, DOOMBOTSTEEMO, ONEFORALL5x5, ASCENSION, etc
+        game_type = match_details.get("info").get("gameType")  # MATCHED_GAME, CUSTOM_GAME
+        queue_id = match_details.get("info").get(
+            "queueId"
+        )  # 420, 430, 440, 450, 700, 720, 900, 910, 920, 940, 950, 960
+        game_version = match_details.get("info").get("gameVersion")  # 11.18.387.1024
+        platform_id = match_details.get("info").get("platformId")  # EUW1
 
         # Validate that both teams exist
         teams = match_details.get("info", {}).get("teams", [])
         if len(teams) < 2:
-            self.logger.info(f'Skipping match {match_id} due to incomplete team data (only {len(teams)} team(s) found)')
+            self.logger.info(f"Skipping match {match_id} due to incomplete team data (only {len(teams)} team(s) found)")
             return None
 
         # list of bans by championId for each team
-        team1_bans = [ban.get('championId') for ban in teams[0].get("bans")]
-        team2_bans = [ban.get('championId') for ban in teams[1].get("bans")]
+        team1_bans = [ban.get("championId") for ban in teams[0].get("bans")]
+        team2_bans = [ban.get("championId") for ban in teams[1].get("bans")]
 
         team1_picks = []
         team2_picks = []
         team1_roles = []
         team2_roles = []
-        team1_participants = [p.get('puuid') for p in match_details.get("info").get("participants") if p.get("teamId") == 100]
-        team2_participants = [p.get('puuid') for p in match_details.get("info").get("participants") if p.get("teamId") == 200]
+        team1_participants = [
+            p.get("puuid") for p in match_details.get("info").get("participants") if p.get("teamId") == 100
+        ]
+        team2_participants = [
+            p.get("puuid") for p in match_details.get("info").get("participants") if p.get("teamId") == 200
+        ]
         team1_participants_data = [p for p in match_details.get("info").get("participants") if p.get("teamId") == 100]
         team2_participants_data = [p for p in match_details.get("info").get("participants") if p.get("teamId") == 200]
 
@@ -441,30 +498,38 @@ class MatchFetcher:
 
         for participant in team1_participants_data:
             team1_picks.append(participant.get("championId"))
-            team1_roles.append(participant.get("individualPosition") if participant.get("individualPosition") in role_order else "UNKNOWN")
+            team1_roles.append(
+                participant.get("individualPosition")
+                if participant.get("individualPosition") in role_order
+                else "UNKNOWN"
+            )
         for participant in team2_participants_data:
             team2_picks.append(participant.get("championId"))
-            team2_roles.append(participant.get("individualPosition") if participant.get("individualPosition") in role_order else "UNKNOWN")
+            team2_roles.append(
+                participant.get("individualPosition")
+                if participant.get("individualPosition") in role_order
+                else "UNKNOWN"
+            )
         match_outcome = teams[0].get("win")  # True if team 1 won, False otherwise
 
-        self.logger.debug(f'Match ID: {match_id}')
-        self.logger.debug(f'Data Version: {data_version}')
-        self.logger.debug(f'Game Creation Timestamp: {game_creation}')
-        self.logger.debug(f'Game Duration: {game_duration} seconds')
-        self.logger.debug(f'Game Mode: {game_mode}')
-        self.logger.debug(f'Game Type: {game_type}')
-        self.logger.debug(f'Queue ID: {queue_id}')
-        self.logger.debug(f'Game Version: {game_version}')
-        self.logger.debug(f'Platform ID: {platform_id}')
-        self.logger.debug(f'Team 1 Bans: {team1_bans}')
-        self.logger.debug(f'Team 2 Bans: {team2_bans}')
-        self.logger.debug(f'Team 1 Picks: {team1_picks}')
-        self.logger.debug(f'Team 2 Picks: {team2_picks}')
-        self.logger.debug(f'Team 1 Roles: {team1_roles}')
-        self.logger.debug(f'Team 2 Roles: {team2_roles}')
-        self.logger.debug(f'Team 1 Participants: {team1_participants}')
-        self.logger.debug(f'Team 2 Participants: {team2_participants}')
-        self.logger.debug(f'Match Outcome (Team 1 Win): {match_outcome}')
+        self.logger.debug(f"Match ID: {match_id}")
+        self.logger.debug(f"Data Version: {data_version}")
+        self.logger.debug(f"Game Creation Timestamp: {game_creation}")
+        self.logger.debug(f"Game Duration: {game_duration} seconds")
+        self.logger.debug(f"Game Mode: {game_mode}")
+        self.logger.debug(f"Game Type: {game_type}")
+        self.logger.debug(f"Queue ID: {queue_id}")
+        self.logger.debug(f"Game Version: {game_version}")
+        self.logger.debug(f"Platform ID: {platform_id}")
+        self.logger.debug(f"Team 1 Bans: {team1_bans}")
+        self.logger.debug(f"Team 2 Bans: {team2_bans}")
+        self.logger.debug(f"Team 1 Picks: {team1_picks}")
+        self.logger.debug(f"Team 2 Picks: {team2_picks}")
+        self.logger.debug(f"Team 1 Roles: {team1_roles}")
+        self.logger.debug(f"Team 2 Roles: {team2_roles}")
+        self.logger.debug(f"Team 1 Participants: {team1_participants}")
+        self.logger.debug(f"Team 2 Participants: {team2_participants}")
+        self.logger.debug(f"Match Outcome (Team 1 Win): {match_outcome}")
 
         match_pre_features = {
             "data_version": data_version,
@@ -483,11 +548,11 @@ class MatchFetcher:
             "team2_roles": team2_roles,
             "team1_participants": team1_participants,
             "team2_participants": team2_participants,
-            "match_outcome": match_outcome
+            "match_outcome": match_outcome,
         }
 
         return match_pre_features
-    
+
     def fetch_summoner_level_data(self, participants: list[str]) -> dict[str, Any]:
         """
         Fetch summoner level for each participant.
@@ -498,11 +563,11 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Mapping of PUUID → summoner level (int).
         """
-        
+
         def _fetch_level(puuid: str) -> tuple[str, Any]:
             if puuid in self._cache_summoner_level:
                 return puuid, self._cache_summoner_level[puuid]
-            summoner_endpoint = f'/lol/summoner/v4/summoners/by-puuid/{puuid}'
+            summoner_endpoint = f"/lol/summoner/v4/summoners/by-puuid/{puuid}"
             summoner_data = self.requester.make_request(is_v5=False, endpoint_url=summoner_endpoint) or {}
             level = summoner_data.get("summonerLevel")
             self._cache_summoner_level[puuid] = level
@@ -513,10 +578,10 @@ class MatchFetcher:
             futures = {executor.submit(_fetch_level, puuid): puuid for puuid in participants}
             for future in as_completed(futures):
                 puuid, level = future.result()
-                self.logger.debug(f'Summoner PUUID: {puuid}, Level: {level}')
+                self.logger.debug(f"Summoner PUUID: {puuid}, Level: {level}")
                 summoner_levels[puuid] = level
         return summoner_levels
-    
+
     def fetch_champion_mastery_data(self, participants: list[str], champion_picks: list[int]) -> dict[str, Any]:
         """
         Fetch champion mastery stats (level, points, last played) for each participant's picked champion.
@@ -528,28 +593,32 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Mapping of PUUID → {lastPlayTime, championLevel, championPoints}.
         """
+
         def _fetch_mastery(puuid: str, champion_id: int) -> tuple[str, dict[str, Any]]:
             cache_key = (puuid, champion_id)
             if cache_key in self._cache_champion_mastery:
                 return puuid, self._cache_champion_mastery[cache_key]
-            endpoint = f'/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/by-champion/{champion_id}'
+            endpoint = f"/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}/by-champion/{champion_id}"
             mastery_data = self.requester.make_request(is_v5=False, endpoint_url=endpoint) or {}
             record = {
                 "lastPlayTime": mastery_data.get("lastPlayTime"),
                 "championLevel": mastery_data.get("championLevel"),
-                "championPoints": mastery_data.get("championPoints")
+                "championPoints": mastery_data.get("championPoints"),
             }
             self._cache_champion_mastery[cache_key] = record
             return puuid, record
 
         champion_masteries: dict[str, Any] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(_fetch_mastery, puuid, champion_picks[participants.index(puuid)]): puuid for puuid in participants}
+            futures = {
+                executor.submit(_fetch_mastery, puuid, champion_picks[participants.index(puuid)]): puuid
+                for puuid in participants
+            }
             for future in as_completed(futures):
                 puuid, record = future.result()
                 champion_masteries[puuid] = record
         return champion_masteries
-    
+
     def fetch_total_mastery_score(self, participants: list[str]) -> dict[str, int]:
         """
         Fetch total champion mastery score for each participant (across all champions).
@@ -560,10 +629,11 @@ class MatchFetcher:
         Returns:
             dict[str, int]: Mapping of PUUID → total mastery score (int).
         """
+
         def _fetch_total_score(puuid: str) -> tuple[str, int]:
             if puuid in self._cache_total_mastery:
                 return puuid, self._cache_total_mastery[puuid]
-            endpoint = f'/lol/champion-mastery/v4/scores/by-puuid/{puuid}'
+            endpoint = f"/lol/champion-mastery/v4/scores/by-puuid/{puuid}"
             total_score = self.requester.make_request(is_v5=False, endpoint_url=endpoint)
             self._cache_total_mastery[puuid] = total_score
             return puuid, total_score
@@ -575,7 +645,7 @@ class MatchFetcher:
                 puuid, score = future.result()
                 total_mastery_scores[puuid] = score
         return total_mastery_scores
-    
+
     def fetch_rank_queue_data(self, participants: list[str]) -> dict[str, Any]:
         """
         Fetch ranked queue info (tier, rank, LP, wins/losses) for solo and flex queues.
@@ -586,10 +656,11 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Mapping of PUUID_solo/PUUID_flex → {tier, rank, leaguePoints, wins, losses, hotStreak}.
         """
+
         def _fetch_rank(puuid: str) -> tuple[str, dict[str, Any]]:
             if puuid in self._cache_rank_entries:
                 return puuid, self._cache_rank_entries[puuid]
-            endpoint = f'/lol/league/v4/entries/by-puuid/{puuid}'
+            endpoint = f"/lol/league/v4/entries/by-puuid/{puuid}"
             rank_data = self.requester.make_request(is_v5=False, endpoint_url=endpoint)
             self._cache_rank_entries[puuid] = rank_data
             return puuid, rank_data
@@ -600,9 +671,11 @@ class MatchFetcher:
             for future in as_completed(futures):
                 puuid, rank_data = future.result()
                 if not isinstance(rank_data, list):
-                    self.logger.debug(f'Rank data for {puuid} is not a list: {type(rank_data).__name__}')
+                    self.logger.debug(f"Rank data for {puuid} is not a list: {type(rank_data).__name__}")
                     continue
-                solo_queue_data = next((entry for entry in rank_data if entry.get("queueType") == "RANKED_SOLO_5x5"), None)
+                solo_queue_data = next(
+                    (entry for entry in rank_data if entry.get("queueType") == "RANKED_SOLO_5x5"), None
+                )
                 if solo_queue_data:
                     rank_queue_data[puuid + "_solo"] = {
                         "tier": solo_queue_data.get("tier"),
@@ -610,9 +683,11 @@ class MatchFetcher:
                         "leaguePoints": solo_queue_data.get("leaguePoints"),
                         "wins": solo_queue_data.get("wins"),
                         "losses": solo_queue_data.get("losses"),
-                        "hotStreak": solo_queue_data.get("hotStreak")
+                        "hotStreak": solo_queue_data.get("hotStreak"),
                     }
-                flex_queue_data = next((entry for entry in rank_data if entry.get("queueType") == "RANKED_FLEX_SR"), None)
+                flex_queue_data = next(
+                    (entry for entry in rank_data if entry.get("queueType") == "RANKED_FLEX_SR"), None
+                )
                 if flex_queue_data:
                     rank_queue_data[puuid + "_flex"] = {
                         "tier": flex_queue_data.get("tier"),
@@ -620,21 +695,23 @@ class MatchFetcher:
                         "leaguePoints": flex_queue_data.get("leaguePoints"),
                         "wins": flex_queue_data.get("wins"),
                         "losses": flex_queue_data.get("losses"),
-                        "hotStreak": flex_queue_data.get("hotStreak")
+                        "hotStreak": flex_queue_data.get("hotStreak"),
                     }
         return rank_queue_data
-    
-    def fetch_raw_player_kpis(self, participants: list[str], match_limit_per_player: int = 50, before_timestamp: int = None) -> dict[str, Any]:
+
+    def fetch_raw_player_kpis(
+        self, participants: list[str], match_limit_per_player: int = 50, before_timestamp: int = None
+    ) -> dict[str, Any]:
         """
         Fetch raw KPI data from the last N matches for each participant, filtered by timestamp.
 
-        For each participant, retrieves their last `match_limit_per_player` match IDs before `before_timestamp`, 
+        For each participant, retrieves their last `match_limit_per_player` match IDs before `before_timestamp`,
         then fetches detailed stats (kills, deaths, CS, gold, damage, etc.) from each match.
 
         Args:
             participants (list[str]): List of player PUUIDs.
             match_limit_per_player (int): Number of prior matches to fetch per player (default: 50).
-            before_timestamp (int, optional): Unix timestamp to filter matches (only matches before this time). 
+            before_timestamp (int, optional): Unix timestamp to filter matches (only matches before this time).
 
         Returns:
             dict[str, Any]: Mapping of PUUID → list of match KPI dicts (70+ stat fields per match).
@@ -644,9 +721,9 @@ class MatchFetcher:
         def _fetch_kpis_ids(puuid: str) -> tuple[str, list[str]]:
             if puuid in self._cache_kpis_ids:
                 return puuid, self._cache_kpis_ids[puuid]
-            endpoint = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit_per_player}'
+            endpoint = f"/lol/match/v5/matches/by-puuid/{puuid}/ids?count={match_limit_per_player}"
             if before_timestamp:
-                endpoint += f'&endTime={before_timestamp}'
+                endpoint += f"&endTime={before_timestamp}"
             ids = self.requester.make_request(is_v5=True, endpoint_url=endpoint)
             ids = ids if isinstance(ids, list) else []
             self._cache_kpis_ids[puuid] = ids
@@ -658,18 +735,20 @@ class MatchFetcher:
             for future in as_completed(futures_ids):
                 puuid, kpis_match_ids = future.result()
                 if not kpis_match_ids:
-                    self.logger.debug(f'No KPI match IDs for {puuid}')
+                    self.logger.debug(f"No KPI match IDs for {puuid}")
                     kpis_data[puuid] = []
                     continue
 
                 # Fetch match details for KPI IDs with bounded concurrency
                 def _fetch_match_kpi(kpis_match_id: str) -> Optional[dict[str, Any]]:
-                    match_details_endpoint = f'/lol/match/v5/matches/{kpis_match_id}'
+                    match_details_endpoint = f"/lol/match/v5/matches/{kpis_match_id}"
                     match_details = self.requester.make_request(is_v5=True, endpoint_url=match_details_endpoint)
                     if not isinstance(match_details, dict) or not match_details.get("info"):
-                        self.logger.debug(f'Invalid match details for {kpis_match_id}')
+                        self.logger.debug(f"Invalid match details for {kpis_match_id}")
                         return None
-                    participant_data = next((p for p in match_details.get("info").get("participants", []) if p.get("puuid") == puuid), None)
+                    participant_data = next(
+                        (p for p in match_details.get("info").get("participants", []) if p.get("puuid") == puuid), None
+                    )
                     if not participant_data:
                         return None
                     game_duration_seconds = match_details.get("info").get("gameDuration", 0)
@@ -749,7 +828,7 @@ class MatchFetcher:
                         "wardKills": participant_data.get("wardKills"),
                         "wardsPlaced": participant_data.get("wardsPlaced"),
                         "win": participant_data.get("win"),
-                        "gameDuration": game_duration_seconds
+                        "gameDuration": game_duration_seconds,
                     }
 
                 kpis_list: list[dict[str, Any]] = []
@@ -762,7 +841,7 @@ class MatchFetcher:
                 kpis_data[puuid] = kpis_list
 
         return kpis_data
-    
+
     def create_match_record(self, match_id: str, match_pre_features: dict[str, Any]) -> dict[str, Any]:
         """
         Construct a single match record for the matches.parquet output table.
@@ -782,18 +861,37 @@ class MatchFetcher:
             "game_version": match_pre_features.get("game_version"),
             "game_duration": match_pre_features.get("game_duration"),
             "team1_win": match_pre_features.get("match_outcome"),
-
             # bans
-            "team1_ban1": match_pre_features.get("team1_bans")[0] if len(match_pre_features.get("team1_bans")) > 0 else None,
-            "team1_ban2": match_pre_features.get("team1_bans")[1] if len(match_pre_features.get("team1_bans")) > 1 else None,
-            "team1_ban3": match_pre_features.get("team1_bans")[2] if len(match_pre_features.get("team1_bans")) > 2 else None,
-            "team1_ban4": match_pre_features.get("team1_bans")[3] if len(match_pre_features.get("team1_bans")) > 3 else None,
-            "team1_ban5": match_pre_features.get("team1_bans")[4] if len(match_pre_features.get("team1_bans")) > 4 else None,
-            "team2_ban1": match_pre_features.get("team2_bans")[0] if len(match_pre_features.get("team2_bans")) > 0 else None,
-            "team2_ban2": match_pre_features.get("team2_bans")[1] if len(match_pre_features.get("team2_bans")) > 1 else None,
-            "team2_ban3": match_pre_features.get("team2_bans")[2] if len(match_pre_features.get("team2_bans")) > 2 else None,
-            "team2_ban4": match_pre_features.get("team2_bans")[3] if len(match_pre_features.get("team2_bans")) > 3 else None,
-            "team2_ban5": match_pre_features.get("team2_bans")[4] if len(match_pre_features.get("team2_bans")) > 4 else None,
+            "team1_ban1": (
+                match_pre_features.get("team1_bans")[0] if len(match_pre_features.get("team1_bans")) > 0 else None
+            ),
+            "team1_ban2": (
+                match_pre_features.get("team1_bans")[1] if len(match_pre_features.get("team1_bans")) > 1 else None
+            ),
+            "team1_ban3": (
+                match_pre_features.get("team1_bans")[2] if len(match_pre_features.get("team1_bans")) > 2 else None
+            ),
+            "team1_ban4": (
+                match_pre_features.get("team1_bans")[3] if len(match_pre_features.get("team1_bans")) > 3 else None
+            ),
+            "team1_ban5": (
+                match_pre_features.get("team1_bans")[4] if len(match_pre_features.get("team1_bans")) > 4 else None
+            ),
+            "team2_ban1": (
+                match_pre_features.get("team2_bans")[0] if len(match_pre_features.get("team2_bans")) > 0 else None
+            ),
+            "team2_ban2": (
+                match_pre_features.get("team2_bans")[1] if len(match_pre_features.get("team2_bans")) > 1 else None
+            ),
+            "team2_ban3": (
+                match_pre_features.get("team2_bans")[2] if len(match_pre_features.get("team2_bans")) > 2 else None
+            ),
+            "team2_ban4": (
+                match_pre_features.get("team2_bans")[3] if len(match_pre_features.get("team2_bans")) > 3 else None
+            ),
+            "team2_ban5": (
+                match_pre_features.get("team2_bans")[4] if len(match_pre_features.get("team2_bans")) > 4 else None
+            ),
             # picks
             "team1_pick_top": match_pre_features.get("team1_picks")[0],
             "team1_pick_jungle": match_pre_features.get("team1_picks")[1],
@@ -804,25 +902,27 @@ class MatchFetcher:
             "team2_pick_jungle": match_pre_features.get("team2_picks")[1],
             "team2_pick_mid": match_pre_features.get("team2_picks")[2],
             "team2_pick_adc": match_pre_features.get("team2_picks")[3],
-            "team2_pick_support": match_pre_features.get("team2_picks")[4]
+            "team2_pick_support": match_pre_features.get("team2_picks")[4],
         }
         return match_record
-    
-    def create_player_history_record(self, 
-                                    match_id: str, 
-                                    puuid: str,
-                                    team_id: int,
-                                    role: str,
-                                    champion_id: int,
-                                    summoner_level: int, 
-                                    champion_mastery: dict[str, Any],
-                                    champion_total_mastery_score: int, 
-                                    rank_queue_data: dict[str, Any],
-                                    kpis_data: list[dict[str, Any]]) -> dict[str, Any]:
+
+    def create_player_history_record(
+        self,
+        match_id: str,
+        puuid: str,
+        team_id: int,
+        role: str,
+        champion_id: int,
+        summoner_level: int,
+        champion_mastery: dict[str, Any],
+        champion_total_mastery_score: int,
+        rank_queue_data: dict[str, Any],
+        kpis_data: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """
         Construct a single player history record for the player_history.parquet output table.
 
-        Aggregates player state (summoner level, mastery, rank) and KPIs (win rate, KDA, per-minute stats) 
+        Aggregates player state (summoner level, mastery, rank) and KPIs (win rate, KDA, per-minute stats)
         from prior matches into a single row per player per match.
 
         Args:
@@ -841,100 +941,102 @@ class MatchFetcher:
             dict[str, Any]: Flat dict with 27 columns (state + aggregated KPIs).
         """
         player_history_record = {
-            'match_id': match_id,
-            'puuid': puuid,
-            'team_id': team_id,
-            'role': role,
-            'champion_id': champion_id,
-
+            "match_id": match_id,
+            "puuid": puuid,
+            "team_id": team_id,
+            "role": role,
+            "champion_id": champion_id,
             # state of the summoner
-            'summoner_level': summoner_level,
-            'champion_mastery_level': champion_mastery.get("championLevel") if champion_mastery else None,
-            'champion_total_mastery_score': champion_total_mastery_score,
-            'ranked_tier': rank_queue_data.get(puuid + "_solo", {}).get("tier") if rank_queue_data.get(puuid + "_solo") else None,
-            'ranked_rank': rank_queue_data.get(puuid + "_solo", {}).get("rank") if rank_queue_data.get(puuid + "_solo") else None,
-            'ranked_league_points': rank_queue_data.get(puuid + "_solo", {}).get("leaguePoints") if rank_queue_data.get(puuid + "_solo") else None,
-
+            "summoner_level": summoner_level,
+            "champion_mastery_level": champion_mastery.get("championLevel") if champion_mastery else None,
+            "champion_total_mastery_score": champion_total_mastery_score,
+            "ranked_tier": (
+                rank_queue_data.get(puuid + "_solo", {}).get("tier") if rank_queue_data.get(puuid + "_solo") else None
+            ),
+            "ranked_rank": (
+                rank_queue_data.get(puuid + "_solo", {}).get("rank") if rank_queue_data.get(puuid + "_solo") else None
+            ),
+            "ranked_league_points": (
+                rank_queue_data.get(puuid + "_solo", {}).get("leaguePoints")
+                if rank_queue_data.get(puuid + "_solo")
+                else None
+            ),
             # pings
-            'all_in_pings': self._calculate_average(kpis_data, 'allInPings'),
-            'assist_me_pings': self._calculate_average(kpis_data, 'assistmePings'),
-            'command_pings': self._calculate_average(kpis_data, 'commandPings'),
-            'enemy_missing_pings': self._calculate_average(kpis_data, 'enemyMissingPings'),
-            'enemy_vision_pings': self._calculate_average(kpis_data, 'enemyVisionPings'),
-            'hold_pings': self._calculate_average(kpis_data, 'holdPings'),
-            'get_back_pings': self._calculate_average(kpis_data, 'getbackPings'),
-            'need_vision_pings': self._calculate_average(kpis_data, 'needVisionPings'),
-            'on_my_way_pings': self._calculate_average(kpis_data, 'onMyWayPings'),
-            'push_pings': self._calculate_average(kpis_data, 'pushPings'),
-            'vision_cleared_pings': self._calculate_average(kpis_data, 'visionClearedPings'),
-
+            "all_in_pings": self._calculate_average(kpis_data, "allInPings"),
+            "assist_me_pings": self._calculate_average(kpis_data, "assistmePings"),
+            "command_pings": self._calculate_average(kpis_data, "commandPings"),
+            "enemy_missing_pings": self._calculate_average(kpis_data, "enemyMissingPings"),
+            "enemy_vision_pings": self._calculate_average(kpis_data, "enemyVisionPings"),
+            "hold_pings": self._calculate_average(kpis_data, "holdPings"),
+            "get_back_pings": self._calculate_average(kpis_data, "getbackPings"),
+            "need_vision_pings": self._calculate_average(kpis_data, "needVisionPings"),
+            "on_my_way_pings": self._calculate_average(kpis_data, "onMyWayPings"),
+            "push_pings": self._calculate_average(kpis_data, "pushPings"),
+            "vision_cleared_pings": self._calculate_average(kpis_data, "visionClearedPings"),
             # wards
-            'average_wards_placed': self._calculate_average(kpis_data, 'wardsPlaced'),
-            'average_ward_kills': self._calculate_average(kpis_data, 'wardKills'),
-            'average_sight_wards_bought': self._calculate_average(kpis_data, 'sightWardsBoughtInGame'),
-            'average_detector_wards_placed': self._calculate_average(kpis_data, 'detectorWardsPlaced'),
-
+            "average_wards_placed": self._calculate_average(kpis_data, "wardsPlaced"),
+            "average_ward_kills": self._calculate_average(kpis_data, "wardKills"),
+            "average_sight_wards_bought": self._calculate_average(kpis_data, "sightWardsBoughtInGame"),
+            "average_detector_wards_placed": self._calculate_average(kpis_data, "detectorWardsPlaced"),
             # kill streaks
-            'average_killing_sprees': self._calculate_average(kpis_data, 'killingSprees'),
-            'average_largest_killing_spree': self._calculate_average(kpis_data, 'largeKillingSpree'),
-            'average_largest_multi_kill': self._calculate_average(kpis_data, 'largestMultiKill'),
-            'average_double_kills': self._calculate_average(kpis_data, 'doubleKills'),
-            'average_triple_kills': self._calculate_average(kpis_data, 'tripleKills'),
-            'average_quadra_kills': self._calculate_average(kpis_data, 'quadraKills'),
-            'average_penta_kills': self._calculate_average(kpis_data, 'pentakills'),
-
+            "average_killing_sprees": self._calculate_average(kpis_data, "killingSprees"),
+            "average_largest_killing_spree": self._calculate_average(kpis_data, "largeKillingSpree"),
+            "average_largest_multi_kill": self._calculate_average(kpis_data, "largestMultiKill"),
+            "average_double_kills": self._calculate_average(kpis_data, "doubleKills"),
+            "average_triple_kills": self._calculate_average(kpis_data, "tripleKills"),
+            "average_quadra_kills": self._calculate_average(kpis_data, "quadraKills"),
+            "average_penta_kills": self._calculate_average(kpis_data, "pentakills"),
             # objectives
-            'average_baron_kills': self._calculate_average(kpis_data, 'baronKills'),
-            'average_dragon_kills': self._calculate_average(kpis_data, 'dragonKills'),
-            'average_inhibitor_kills': self._calculate_average(kpis_data, 'inhibitorKills'),
-            'average_inhibitor_takedowns': self._calculate_average(kpis_data, 'inhibitorTakedowns'),
-            'average_inhibitors_lost': self._calculate_average(kpis_data, 'inhibitorsLost'),
-            'average_turret_kills': self._calculate_average(kpis_data, 'turretKills'),
-            'average_turret_takedowns': self._calculate_average(kpis_data, 'turretTakedowns'),
-            'average_turrets_lost': self._calculate_average(kpis_data, 'turretsLost'),
-            'average_objectives_stolen': self._calculate_average(kpis_data, 'objectivesStolen'),
-            'average_objectives_stolen_assists': self._calculate_average(kpis_data, 'objectivesStolenAssists'),
-
+            "average_baron_kills": self._calculate_average(kpis_data, "baronKills"),
+            "average_dragon_kills": self._calculate_average(kpis_data, "dragonKills"),
+            "average_inhibitor_kills": self._calculate_average(kpis_data, "inhibitorKills"),
+            "average_inhibitor_takedowns": self._calculate_average(kpis_data, "inhibitorTakedowns"),
+            "average_inhibitors_lost": self._calculate_average(kpis_data, "inhibitorsLost"),
+            "average_turret_kills": self._calculate_average(kpis_data, "turretKills"),
+            "average_turret_takedowns": self._calculate_average(kpis_data, "turretTakedowns"),
+            "average_turrets_lost": self._calculate_average(kpis_data, "turretsLost"),
+            "average_objectives_stolen": self._calculate_average(kpis_data, "objectivesStolen"),
+            "average_objectives_stolen_assists": self._calculate_average(kpis_data, "objectivesStolenAssists"),
             # damage stats
-            'average_total_damage_dealt_to_champions': self._calculate_average(kpis_data, 'totalDamageDealtToChampions'),
-            'average_physical_damage_dealt_to_champions': self._calculate_average(kpis_data, 'physicalDamageDealtToChampions'),
-            'average_magic_damage_dealt_to_champions': self._calculate_average(kpis_data, 'magicDamageDealtToChampions'),
-            'average_true_damage_dealt_to_champions': self._calculate_average(kpis_data, 'trueDamageDealtToChampions'),
-            'average_total_damage_taken': self._calculate_average(kpis_data, 'totalDamageTaken'),
-            'average_damage_self_mitigated': self._calculate_average(kpis_data, 'damageSelfMitigated'),
-            'average_total_heal': self._calculate_average(kpis_data, 'totalHeal'),
-            'average_total_heals_on_teammates': self._calculate_average(kpis_data, 'totalHealsOnTeammates'),
-
+            "average_total_damage_dealt_to_champions": self._calculate_average(
+                kpis_data, "totalDamageDealtToChampions"
+            ),
+            "average_physical_damage_dealt_to_champions": self._calculate_average(
+                kpis_data, "physicalDamageDealtToChampions"
+            ),
+            "average_magic_damage_dealt_to_champions": self._calculate_average(
+                kpis_data, "magicDamageDealtToChampions"
+            ),
+            "average_true_damage_dealt_to_champions": self._calculate_average(kpis_data, "trueDamageDealtToChampions"),
+            "average_total_damage_taken": self._calculate_average(kpis_data, "totalDamageTaken"),
+            "average_damage_self_mitigated": self._calculate_average(kpis_data, "damageSelfMitigated"),
+            "average_total_heal": self._calculate_average(kpis_data, "totalHeal"),
+            "average_total_heals_on_teammates": self._calculate_average(kpis_data, "totalHealsOnTeammates"),
             # combat stats
-            'average_kills': self._calculate_average(kpis_data, 'kills'),
-            'average_deaths': self._calculate_average(kpis_data, 'deaths'),
-            'average_assists': self._calculate_average(kpis_data, 'assists'),
-            'kda_ratio': self._calculate_kda_ratio(kpis_data),
-            'win_rate': self._calculate_win_rate(kpis_data),
-            'average_cs_per_minute': self._calculate_per_minute(kpis_data, 'totalMinionsKilled'),
-            'average_kills_per_minute': self._calculate_per_minute(kpis_data, 'kills'),
-            'average_deaths_per_minute': self._calculate_per_minute(kpis_data, 'deaths'),
-            'average_assists_per_minute': self._calculate_per_minute(kpis_data, 'assists'),
-
+            "average_kills": self._calculate_average(kpis_data, "kills"),
+            "average_deaths": self._calculate_average(kpis_data, "deaths"),
+            "average_assists": self._calculate_average(kpis_data, "assists"),
+            "kda_ratio": self._calculate_kda_ratio(kpis_data),
+            "win_rate": self._calculate_win_rate(kpis_data),
+            "average_cs_per_minute": self._calculate_per_minute(kpis_data, "totalMinionsKilled"),
+            "average_kills_per_minute": self._calculate_per_minute(kpis_data, "kills"),
+            "average_deaths_per_minute": self._calculate_per_minute(kpis_data, "deaths"),
+            "average_assists_per_minute": self._calculate_per_minute(kpis_data, "assists"),
             # cs
-            'average_total_minions_killed': self._calculate_average(kpis_data, 'totalMinionsKilled'),
-            'average_neutral_minions_killed': self._calculate_average(kpis_data, 'neutralMinionsKilled'),
-
+            "average_total_minions_killed": self._calculate_average(kpis_data, "totalMinionsKilled"),
+            "average_neutral_minions_killed": self._calculate_average(kpis_data, "neutralMinionsKilled"),
             # gold
-            'average_gold_earned': self._calculate_average(kpis_data, 'goldEarned'),
-            'average_gold_spent': self._calculate_average(kpis_data, 'goldSpent'),
-            'average_items_purchased': self._calculate_average(kpis_data, 'itemsPurchased'),
-
+            "average_gold_earned": self._calculate_average(kpis_data, "goldEarned"),
+            "average_gold_spent": self._calculate_average(kpis_data, "goldSpent"),
+            "average_items_purchased": self._calculate_average(kpis_data, "itemsPurchased"),
             # cc
-            'average_time_ccing_others': self._calculate_average(kpis_data, 'timeCCingOthers'),
-            'average_total_time_cc_dealt': self._calculate_average(kpis_data, 'totalTimeCCDealt'),
-
+            "average_time_ccing_others": self._calculate_average(kpis_data, "timeCCingOthers"),
+            "average_total_time_cc_dealt": self._calculate_average(kpis_data, "totalTimeCCDealt"),
             # survival
-            'average_longest_time_spent_living': self._calculate_average(kpis_data, 'longestTimeSpentLiving'),
-            'average_total_time_spent_dead': self._calculate_average(kpis_data, 'totalTimeSpentDead'),
-
+            "average_longest_time_spent_living": self._calculate_average(kpis_data, "longestTimeSpentLiving"),
+            "average_total_time_spent_dead": self._calculate_average(kpis_data, "totalTimeSpentDead"),
             # others
-            'average_vision_score': self._calculate_average(kpis_data, 'visionScore')
+            "average_vision_score": self._calculate_average(kpis_data, "visionScore"),
         }
 
         return player_history_record
@@ -953,7 +1055,7 @@ class MatchFetcher:
             return 0.0
         wins = sum(1 for kpis in kpis_data if kpis.get("win"))
         return wins / len(kpis_data)
-    
+
     def _calculate_average(self, kpis_data: list[dict[str, Any]], key: str) -> float:
         """
         Calculate the average value of a stat across prior matches.
@@ -970,7 +1072,7 @@ class MatchFetcher:
 
         total = sum(self._safe_number(kpis.get(key)) for kpis in kpis_data)
         return total / len(kpis_data)
-    
+
     def _safe_number(self, value: Any) -> float:
         """
         Convert a value to float if numeric; otherwise return 0.0.
@@ -982,7 +1084,7 @@ class MatchFetcher:
             float: Numeric value or 0.0 for None/non-numeric inputs.
         """
         return value if isinstance(value, (int, float)) else 0.0
-    
+
     def _calculate_kda_ratio(self, kpis_data: list[dict[str, Any]]) -> float:
         """
         Calculate the KDA (Kill+Death Assist / Death) ratio from prior matches.
@@ -1001,7 +1103,7 @@ class MatchFetcher:
         if total_deaths == 0:
             return total_kills + total_assists
         return (total_kills + total_assists) / total_deaths
-    
+
     def _calculate_per_minute(self, kpis_data: list[dict[str, Any]], key: str) -> float:
         """
         Calculate the per-minute rate of a statistic from prior matches.

@@ -15,7 +15,12 @@ import inspect
 from typing import Dict, Any, Optional, Tuple, Callable
 
 from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.ensemble import (
+    RandomForestClassifier,
+    RandomForestRegressor,
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+)
 from sklearn.svm import SVC, SVR
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
@@ -28,7 +33,7 @@ warnings.filterwarnings("ignore")
 class ModelOptimizer:
     """
     Hyperparameter optimizer using genetic algorithm.
-    
+
     Optimizes hyperparameters for multiple sklearn model types using a genetic algorithm
     approach with selection, crossover, and mutation operators.
     """
@@ -46,7 +51,7 @@ class ModelOptimizer:
     ):
         """
         Initialize ModelOptimizer.
-        
+
         Args:
             X_train: Training features
             X_test: Test features
@@ -65,7 +70,7 @@ class ModelOptimizer:
         self.logger = logger or self._setup_logger()
         self.verbose = verbose
         self.random_state = random_state
-        
+
         random.seed(random_state)
         np.random.seed(random_state)
 
@@ -74,9 +79,7 @@ class ModelOptimizer:
         logger = logging.getLogger("ModelOptimizer")
         if not logger.handlers:
             handler = logging.StreamHandler()
-            handler.setFormatter(
-                logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            )
+            handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
         return logger
@@ -95,10 +98,10 @@ class ModelOptimizer:
         **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Any]]:
         """Optimize linear regression or logistic regression."""
-        
+
         is_logistic = model_class == LogisticRegression
         model_type = "LogisticRegression" if is_logistic else "LinearRegression"
-        
+
         if self.verbose:
             self.logger.info(f"Optimizing {model_type}")
 
@@ -123,18 +126,15 @@ class ModelOptimizer:
             # Evaluate fitness
             fitnesses = []
             models = []
-            
+
             for individual in population:
-                fitness, model, _ = self._evaluate_individual(
-                    individual, model_class, model_type
-                )
+                fitness, model, _ = self._evaluate_individual(individual, model_class, model_type)
                 fitnesses.append(fitness)
                 models.append(model)
 
                 # Track best
-                is_better = (
-                    (self.is_classification and fitness > best_fitness) or
-                    (not self.is_classification and fitness < best_fitness)
+                is_better = (self.is_classification and fitness > best_fitness) or (
+                    not self.is_classification and fitness < best_fitness
                 )
                 if is_better:
                     best_fitness = fitness
@@ -142,14 +142,11 @@ class ModelOptimizer:
                     best_model = model
 
             if self.verbose:
-                self.logger.info(
-                    f"  Best fitness: {best_fitness:.4f} | "
-                    f"Avg fitness: {np.mean(fitnesses):.4f}"
-                )
+                self.logger.info(f"  Best fitness: {best_fitness:.4f} | " f"Avg fitness: {np.mean(fitnesses):.4f}")
 
             # Selection, crossover, mutation
             new_population = []
-            
+
             # Elitism
             if best_individual is not None:
                 new_population.append(copy.deepcopy(best_individual))
@@ -172,9 +169,13 @@ class ModelOptimizer:
             population = new_population[:population_size]
 
         return (
-            best_individual,
-            best_model,
-        ) if best_individual is not None else None
+            (
+                best_individual,
+                best_model,
+            )
+            if best_individual is not None
+            else None
+        )
 
     def optimize_svm(
         self,
@@ -191,9 +192,9 @@ class ModelOptimizer:
         **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Any]]:
         """Optimize SVM (SVC or SVR)."""
-        
+
         model_type = "SVC" if model_class == SVC else "SVR"
-        
+
         if self.verbose:
             self.logger.info(f"Optimizing {model_type}")
 
@@ -216,17 +217,14 @@ class ModelOptimizer:
 
             fitnesses = []
             models = []
-            
+
             for individual in population:
-                fitness, model, _ = self._evaluate_individual(
-                    individual, model_class, model_type
-                )
+                fitness, model, _ = self._evaluate_individual(individual, model_class, model_type)
                 fitnesses.append(fitness)
                 models.append(model)
 
-                is_better = (
-                    (self.is_classification and fitness > best_fitness) or
-                    (not self.is_classification and fitness < best_fitness)
+                is_better = (self.is_classification and fitness > best_fitness) or (
+                    not self.is_classification and fitness < best_fitness
                 )
                 if is_better:
                     best_fitness = fitness
@@ -234,10 +232,7 @@ class ModelOptimizer:
                     best_model = model
 
             if self.verbose:
-                self.logger.info(
-                    f"  Best fitness: {best_fitness:.4f} | "
-                    f"Avg fitness: {np.mean(fitnesses):.4f}"
-                )
+                self.logger.info(f"  Best fitness: {best_fitness:.4f} | " f"Avg fitness: {np.mean(fitnesses):.4f}")
 
             new_population = []
             if best_individual is not None:
@@ -277,9 +272,9 @@ class ModelOptimizer:
         **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Any]]:
         """Optimize Random Forest (Classifier or Regressor)."""
-        
+
         model_type = "RandomForestClassifier" if model_class == RandomForestClassifier else "RandomForestRegressor"
-        
+
         if self.verbose:
             self.logger.info(f"Optimizing {model_type}")
 
@@ -304,17 +299,14 @@ class ModelOptimizer:
 
             fitnesses = []
             models = []
-            
+
             for individual in population:
-                fitness, model, _ = self._evaluate_individual(
-                    individual, model_class, model_type
-                )
+                fitness, model, _ = self._evaluate_individual(individual, model_class, model_type)
                 fitnesses.append(fitness)
                 models.append(model)
 
-                is_better = (
-                    (self.is_classification and fitness > best_fitness) or
-                    (not self.is_classification and fitness < best_fitness)
+                is_better = (self.is_classification and fitness > best_fitness) or (
+                    not self.is_classification and fitness < best_fitness
                 )
                 if is_better:
                     best_fitness = fitness
@@ -322,10 +314,7 @@ class ModelOptimizer:
                     best_model = model
 
             if self.verbose:
-                self.logger.info(
-                    f"  Best fitness: {best_fitness:.4f} | "
-                    f"Avg fitness: {np.mean(fitnesses):.4f}"
-                )
+                self.logger.info(f"  Best fitness: {best_fitness:.4f} | " f"Avg fitness: {np.mean(fitnesses):.4f}")
 
             new_population = []
             if best_individual is not None:
@@ -370,9 +359,11 @@ class ModelOptimizer:
         **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Any]]:
         """Optimize Gradient Boosting (Classifier or Regressor)."""
-        
-        model_type = "GradientBoostingClassifier" if model_class == GradientBoostingClassifier else "GradientBoostingRegressor"
-        
+
+        model_type = (
+            "GradientBoostingClassifier" if model_class == GradientBoostingClassifier else "GradientBoostingRegressor"
+        )
+
         if self.verbose:
             self.logger.info(f"Optimizing {model_type}")
 
@@ -396,17 +387,14 @@ class ModelOptimizer:
 
             fitnesses = []
             models = []
-            
+
             for individual in population:
-                fitness, model, _ = self._evaluate_individual(
-                    individual, model_class, model_type
-                )
+                fitness, model, _ = self._evaluate_individual(individual, model_class, model_type)
                 fitnesses.append(fitness)
                 models.append(model)
 
-                is_better = (
-                    (self.is_classification and fitness > best_fitness) or
-                    (not self.is_classification and fitness < best_fitness)
+                is_better = (self.is_classification and fitness > best_fitness) or (
+                    not self.is_classification and fitness < best_fitness
                 )
                 if is_better:
                     best_fitness = fitness
@@ -414,10 +402,7 @@ class ModelOptimizer:
                     best_model = model
 
             if self.verbose:
-                self.logger.info(
-                    f"  Best fitness: {best_fitness:.4f} | "
-                    f"Avg fitness: {np.mean(fitnesses):.4f}"
-                )
+                self.logger.info(f"  Best fitness: {best_fitness:.4f} | " f"Avg fitness: {np.mean(fitnesses):.4f}")
 
             new_population = []
             if best_individual is not None:
@@ -460,9 +445,9 @@ class ModelOptimizer:
         **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Any]]:
         """Optimize KNN (Classifier or Regressor)."""
-        
+
         model_type = "KNeighborsClassifier" if model_class == KNeighborsClassifier else "KNeighborsRegressor"
-        
+
         if self.verbose:
             self.logger.info(f"Optimizing {model_type}")
 
@@ -485,17 +470,14 @@ class ModelOptimizer:
 
             fitnesses = []
             models = []
-            
+
             for individual in population:
-                fitness, model, _ = self._evaluate_individual(
-                    individual, model_class, model_type
-                )
+                fitness, model, _ = self._evaluate_individual(individual, model_class, model_type)
                 fitnesses.append(fitness)
                 models.append(model)
 
-                is_better = (
-                    (self.is_classification and fitness > best_fitness) or
-                    (not self.is_classification and fitness < best_fitness)
+                is_better = (self.is_classification and fitness > best_fitness) or (
+                    not self.is_classification and fitness < best_fitness
                 )
                 if is_better:
                     best_fitness = fitness
@@ -503,10 +485,7 @@ class ModelOptimizer:
                     best_model = model
 
             if self.verbose:
-                self.logger.info(
-                    f"  Best fitness: {best_fitness:.4f} | "
-                    f"Avg fitness: {np.mean(fitnesses):.4f}"
-                )
+                self.logger.info(f"  Best fitness: {best_fitness:.4f} | " f"Avg fitness: {np.mean(fitnesses):.4f}")
 
             new_population = []
             if best_individual is not None:
@@ -549,9 +528,9 @@ class ModelOptimizer:
         **kwargs,
     ) -> Optional[Tuple[Dict[str, Any], Any]]:
         """Optimize MLP (Classifier or Regressor)."""
-        
+
         model_type = "MLPClassifier" if model_class == MLPClassifier else "MLPRegressor"
-        
+
         if self.verbose:
             self.logger.info(f"Optimizing {model_type}")
 
@@ -575,17 +554,14 @@ class ModelOptimizer:
 
             fitnesses = []
             models = []
-            
+
             for individual in population:
-                fitness, model, _ = self._evaluate_individual(
-                    individual, model_class, model_type
-                )
+                fitness, model, _ = self._evaluate_individual(individual, model_class, model_type)
                 fitnesses.append(fitness)
                 models.append(model)
 
-                is_better = (
-                    (self.is_classification and fitness > best_fitness) or
-                    (not self.is_classification and fitness < best_fitness)
+                is_better = (self.is_classification and fitness > best_fitness) or (
+                    not self.is_classification and fitness < best_fitness
                 )
                 if is_better:
                     best_fitness = fitness
@@ -593,10 +569,7 @@ class ModelOptimizer:
                     best_model = model
 
             if self.verbose:
-                self.logger.info(
-                    f"  Best fitness: {best_fitness:.4f} | "
-                    f"Avg fitness: {np.mean(fitnesses):.4f}"
-                )
+                self.logger.info(f"  Best fitness: {best_fitness:.4f} | " f"Avg fitness: {np.mean(fitnesses):.4f}")
 
             new_population = []
             if best_individual is not None:
@@ -635,7 +608,7 @@ class ModelOptimizer:
     ) -> Tuple[float, Any, float]:
         """Evaluate fitness of an individual."""
         start_time = time.time()
-        
+
         try:
             # Clean parameters (remove None values)
             params = {k: v for k, v in individual.items() if v is not None}

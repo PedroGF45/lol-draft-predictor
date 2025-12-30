@@ -16,6 +16,6 @@ def fetch_latest_champion_ids():
     response = requests.get(url)
     champions_data = response.json()
 
-    champion_ids = {int(champion_info['key']) for _, champion_info in champions_data['data'].items()}
+    champion_ids = {int(champion_info["key"]) for _, champion_info in champions_data["data"].items()}
 
     return champion_ids

@@ -14,15 +14,17 @@ import pyarrow.parquet as pq
 import os
 from tqdm import tqdm
 
+
 class InvalidPatientZeroError(Exception):
     """Raised when the provided patient zero account is invalid or not found."""
 
-class DataMiner():
+
+class DataMiner:
     """
     Orchestrates breadth-first search (BFS) discovery of matches and players from Riot API.
 
-    Implements a resumable crawl through League of Legends match history and participant data, 
-    starting from a patient-zero summoner and expanding outward. Stores discovered players and 
+    Implements a resumable crawl through League of Legends match history and participant data,
+    starting from a patient-zero summoner and expanding outward. Stores discovered players and
     matches while maintaining checkpoint state for recovery from interruptions.
 
     Attributes:
@@ -36,21 +38,23 @@ class DataMiner():
         seen_matches (set): Set of already-processed match IDs (prevents duplicate work).
     """
 
-    def __init__(self, 
+    def __init__(
+        self,
         logger: logging.Logger,
         requester: Requester,
         parquet_handler: ParquetHandler,
-        raw_data_path: str, 
-        patient_zero_game_name: str, 
+        raw_data_path: str,
+        patient_zero_game_name: str,
         patient_zero_tag_line: str,
         checkpoint_loading_path: str = None,
         checkpoint_save_path: str = None,
         master_registry: Optional[MasterDataRegistry] = None,
-        max_workers: int = 4) -> None:
+        max_workers: int = 4,
+    ) -> None:
         """
         Initialize DataMiner with a patient zero summoner and optional checkpoint recovery.
 
-        Validates the patient zero summoner exists in the API, initializes BFS queues, and optionally 
+        Validates the patient zero summoner exists in the API, initializes BFS queues, and optionally
         restores crawl state from a checkpoint file (for resumable discovery).
 
         Args:
@@ -65,7 +69,7 @@ class DataMiner():
         Raises:
             InvalidPatientZeroError: If patient_zero summoner is not found or API returns error.
         """
-    
+
         self.logger = logger
         self.requester = requester
         self.parquet_handler = parquet_handler
@@ -86,17 +90,19 @@ class DataMiner():
             self._cache_match_players: dict[str, List[str]] = {}
         else:
             checkpoint_state = load_checkpoint(logger=self.logger, path=checkpoint_loading_path)
-            self.players_queue = checkpoint_state.get('players_queue')
-            self.seen_players = checkpoint_state.get('seen_players')
-            self.seen_matches = checkpoint_state.get('seen_matches')
-            self.logger.info(f'Loaded:{len(self.players_queue)} for the players queue \n{len(self.seen_players)} for the players set \n{len(self.seen_matches)} for the matches set \n')
+            self.players_queue = checkpoint_state.get("players_queue")
+            self.seen_players = checkpoint_state.get("seen_players")
+            self.seen_matches = checkpoint_state.get("seen_matches")
+            self.logger.info(
+                f"Loaded:{len(self.players_queue)} for the players queue \n{len(self.seen_players)} for the players set \n{len(self.seen_matches)} for the matches set \n"
+            )
             self._cache_match_players = {}
 
         if not self._is_patient_zero_valid():
             raise InvalidPatientZeroError(
                 f"Invalid patient zero: '{self.patient_zero_game_name}#{self.patient_zero_tag_line}' not found or inaccessible"
             )
-        
+
     def _is_patient_zero_valid(self) -> bool:
         """
         Validate that the patient zero summoner exists in the API and add them to discovery queue.
@@ -107,7 +113,9 @@ class DataMiner():
         Returns:
             bool: True if patient zero summoner found and added to queue, False otherwise.
         """
-        endpoint_url = f"/riot/account/v1/accounts/by-riot-id/{self.patient_zero_game_name}/{self.patient_zero_tag_line}"
+        endpoint_url = (
+            f"/riot/account/v1/accounts/by-riot-id/{self.patient_zero_game_name}/{self.patient_zero_tag_line}"
+        )
         response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
 
         if response and response.get("puuid"):
@@ -116,14 +124,13 @@ class DataMiner():
             return True
         return False
 
-    def start_search(self, 
-                            search_mode: str = 'players',
-                            target_number_of_players: int = 100,
-                            target_number_of_matches: int = 100) -> None:
+    def start_search(
+        self, search_mode: str = "players", target_number_of_players: int = 100, target_number_of_matches: int = 100
+    ) -> None:
         """
         Execute breadth-first search discovery of matches and players.
 
-        Expands outward from patient zero, discovering new matches and participants based on search mode, 
+        Expands outward from patient zero, discovering new matches and participants based on search mode,
         and continues until the target is reached. Periodically saves checkpoints for recovery.
 
         Args:
@@ -135,8 +142,10 @@ class DataMiner():
             None. Results stored in seen_players and seen_matches sets.
         """
 
-        if search_mode not in ['players', 'matches']:
-            self.logger.warning(f'Search mode should be "players", "matches" or "both" but got {search_mode}. Sticking to default "players" search.')
+        if search_mode not in ["players", "matches"]:
+            self.logger.warning(
+                f'Search mode should be "players", "matches" or "both" but got {search_mode}. Sticking to default "players" search.'
+            )
             search_mode = "players"
 
         number_of_matches = 0
@@ -146,7 +155,6 @@ class DataMiner():
             number_of_matches = 50
         else:
             number_of_matches = 20
-
 
         start = time.time()
 
@@ -169,14 +177,18 @@ class DataMiner():
             checkpoint_interval = 1000
         else:
             checkpoint_interval = 10000
-    
+
         last_checkpoint_count = current_count  # Track last checkpoint count
         self.logger.info(f"Checkpoint interval set to {checkpoint_interval} (target: {target_total})")
 
-        while len(self.players_queue) > 0 and not self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
+        while len(self.players_queue) > 0 and not self._has_reached_target(
+            mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches
+        ):
 
-            self.logger.info(f'Number of current players: {len(self.seen_players)}\n Number of current matches: {len(self.seen_matches)}')
-            
+            self.logger.info(
+                f"Number of current players: {len(self.seen_players)}\n Number of current matches: {len(self.seen_matches)}"
+            )
+
             player_to_use = self.players_queue.popleft()
             matches_of_player = self.get_last_matches(puuid=player_to_use, number_of_matches=number_of_matches)
 
@@ -195,17 +207,27 @@ class DataMiner():
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = {executor.submit(_fetch_match_players, mid): mid for mid in unseen_matches}
                 for future in as_completed(futures):
-                    if self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
+                    if self._has_reached_target(
+                        mode=search_mode,
+                        target_players=target_number_of_players,
+                        target_matches=target_number_of_matches,
+                    ):
                         break
                     _, new_players = future.result()
                     for player in new_players:
-                        if self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
+                        if self._has_reached_target(
+                            mode=search_mode,
+                            target_players=target_number_of_players,
+                            target_matches=target_number_of_matches,
+                        ):
                             break
                         if player not in self.seen_players:
                             self.seen_players.add(player)
                             self.players_queue.append(player)
 
-            self.logger.info(f'Number of players after requests: {len(self.seen_players)}\n Number of matches after requests: {len(self.seen_matches)}')
+            self.logger.info(
+                f"Number of players after requests: {len(self.seen_players)}\n Number of matches after requests: {len(self.seen_matches)}"
+            )
 
             # Update progress bar
             if search_mode == "matches":
@@ -227,59 +249,67 @@ class DataMiner():
                 checkpoint_dict["seen_players"] = self.seen_players
                 checkpoint_dict["seen_matches"] = self.seen_matches
 
-                timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-            
+                timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+
                 if self.checkpoint_save_path:
                     os.makedirs(self.checkpoint_save_path, exist_ok=True)
-                    checkpoint_path = os.path.join(self.checkpoint_save_path, f"{timestamp}_{len(self.seen_players)}_players_{len(self.seen_matches)}_matches.pkl")
+                    checkpoint_path = os.path.join(
+                        self.checkpoint_save_path,
+                        f"{timestamp}_{len(self.seen_players)}_players_{len(self.seen_matches)}_matches.pkl",
+                    )
                 else:
                     raise ValueError("checkpoint_save_path must be provided to save checkpoints")
-                
+
                 save_checkpoint(logger=self.logger, state=checkpoint_dict, path=checkpoint_path)
                 last_checkpoint_count = new_count
                 self.logger.info(f"Checkpoint saved at {new_count} items")
-            
+
             # Check for rate limiting and apply backoff
             if self.requester.should_backoff(threshold=3):
                 # Rate limit detected: reduce worker count
                 self.max_workers = max(1, self.max_workers // 2)
                 self.logger.warning(f"Rate limit backoff: reduced max_workers to {self.max_workers}")
-                self.backoff_cooldown_counter = 0  # Reset cooldown to require many successful iterations before increase
+                self.backoff_cooldown_counter = (
+                    0  # Reset cooldown to require many successful iterations before increase
+                )
             else:
                 # Gradually increase workers back up if we're not hitting rate limits
                 self.backoff_cooldown_counter += 1
-                if self.backoff_cooldown_counter >= 30 and self.max_workers < 4:  # Increase after 30 successful iterations
+                if (
+                    self.backoff_cooldown_counter >= 30 and self.max_workers < 4
+                ):  # Increase after 30 successful iterations
                     self.max_workers = min(4, self.max_workers + 1)
                     self.logger.info(f"Rate limit recovery: increased max_workers to {self.max_workers}")
                     self.backoff_cooldown_counter = 0
 
         players_dataframe = self.convert_to_dataframe(set_to_save=self.seen_players, mode="players")
         matches_dataframe = self.convert_to_dataframe(set_to_save=self.seen_matches, mode="matches")
-        #Filter through master registry if available to avoid duplicates
+        # Filter through master registry if available to avoid duplicates
         if self.master_registry:
             self.logger.info(f"Filtering {len(matches_dataframe)} matches through master registry")
             # Note: DataMiner only has match_ids, not game_versions yet
             # The registry will track these matches, and MatchFetcher will add game_version
             collection_metadata = {
-                'source': 'data_miner',
-                'search_mode': search_mode,
-                'patient_zero': f"{self.patient_zero_game_name}#{self.patient_zero_tag_line}"
+                "source": "data_miner",
+                "search_mode": search_mode,
+                "patient_zero": f"{self.patient_zero_game_name}#{self.patient_zero_tag_line}",
             }
             # We'll pass game_version as 'pending' here since we don't have it yet
-            matches_dataframe['game_version'] = 'pending'
+            matches_dataframe["game_version"] = "pending"
             matches_dataframe, duplicates = self.master_registry.register_matches(
-                matches_dataframe, 
-                collection_metadata=collection_metadata
+                matches_dataframe, collection_metadata=collection_metadata
             )
-            self.logger.info(f"After registry filter: {len(matches_dataframe)} new matches, {duplicates} duplicates skipped")
+            self.logger.info(
+                f"After registry filter: {len(matches_dataframe)} new matches, {duplicates} duplicates skipped"
+            )
 
         # suffix with detailed timestamp and number of players/matches saved
-        current_date = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
-        player_prefix = f'{current_date}_{len(players_dataframe)}_players'
+        current_date = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+        player_prefix = f"{current_date}_{len(players_dataframe)}_players"
         player_data_path = os.path.join(self.raw_data_path, f"exploration\\players\\{player_prefix}.parquet")
         self.parquet_handler.write_parquet(data=players_dataframe, file_path=player_data_path)
-        
-        match_prefix = f'{current_date}_{len(matches_dataframe)}_matches'
+
+        match_prefix = f"{current_date}_{len(matches_dataframe)}_matches"
         match_data_path = os.path.join(self.raw_data_path, f"exploration\\matches\\{match_prefix}.parquet")
         self.parquet_handler.write_parquet(data=matches_dataframe, file_path=match_data_path)
 
@@ -292,9 +322,11 @@ class DataMiner():
             pbar.close()
 
         end = time.time()
-        self.logger.info(f'Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}')
-        self.logger.info(f'Matches length is {len(self.seen_matches)}')
-        self.logger.info(f'It took {end - start} seconds')
+        self.logger.info(
+            f"Players length is {len(self.players_queue)} and set players length is {len(self.seen_players)}"
+        )
+        self.logger.info(f"Matches length is {len(self.seen_matches)}")
+        self.logger.info(f"It took {end - start} seconds")
 
     def get_last_matches(self, puuid: str, number_of_matches: int = 100) -> List[str]:
         """
@@ -307,12 +339,12 @@ class DataMiner():
         Returns:
             List[str]: List of match IDs. Returns empty list if API request fails.
         """
-        endpoint_url = f'/lol/match/v5/matches/by-puuid/{puuid}/ids?count={number_of_matches}'
+        endpoint_url = f"/lol/match/v5/matches/by-puuid/{puuid}/ids?count={number_of_matches}"
         response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
 
         if response:
             return response
-        self.logger.warning(f'Matches weren\'t fetch for player with puuid of {puuid}')
+        self.logger.warning(f"Matches weren't fetch for player with puuid of {puuid}")
         return []
 
     def get_players_from_match(self, match_id: str) -> List[str]:
@@ -325,12 +357,12 @@ class DataMiner():
         Returns:
             List[str]: List of participant PUUIDs. Returns empty list if API request fails.
         """
-        endpoint_url = f'/lol/match/v5/matches/{match_id}'
+        endpoint_url = f"/lol/match/v5/matches/{match_id}"
         response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
 
         if response and response.get("metadata").get("participants"):
             return response.get("metadata").get("participants")
-        self.logger.warning(f'Players weren\'t fetch for the match with the id of {match_id}')
+        self.logger.warning(f"Players weren't fetch for the match with the id of {match_id}")
         return []
 
     def _has_reached_target(self, mode: str, target_players: int, target_matches: int) -> bool:
@@ -351,7 +383,7 @@ class DataMiner():
             return len(self.seen_matches) >= target_matches
         else:
             raise ValueError(f"Unknown search_mode: {mode}")
-    
+
     def convert_to_dataframe(self, set_to_save: set, mode: str) -> pd.DataFrame:
         """
         Convert a set of player PUUIDs or match IDs to a pandas DataFrame.
@@ -371,9 +403,9 @@ class DataMiner():
         try:
             columns = "puuid" if mode == "players" else "match_id"
             dataframe = pd.DataFrame(list(set_to_save), columns=[columns])
-        
+
         except Exception as e:
-            self.logger.error(f'Error trying to create a pandas Dataframe: {e}')
+            self.logger.error(f"Error trying to create a pandas Dataframe: {e}")
             return None
-        
-        return dataframe   
+
+        return dataframe

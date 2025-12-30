@@ -5,6 +5,7 @@ from urllib.parse import urljoin
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+
 class Requester:
     """
     Lightweight HTTP client for Riot API endpoints with retries and timeouts.
@@ -52,7 +53,7 @@ class Requester:
               the `Retry-After` header when present.
             - The session is mounted for both HTTP and HTTPS with the same policy.
         """
-    
+
         self.logger = logger
 
         # Normalize base URL to always end with a single slash for safe joining
@@ -133,7 +134,11 @@ class Requester:
         elif response.status_code == 429:
             self.rate_limit_hits += 1
             retry_after = response.headers.get("Retry-After")
-            self.logger.warning("Error 429: Rate limited (hit #%d). Retry-After=%s seconds.", self.rate_limit_hits, retry_after or "unknown")
+            self.logger.warning(
+                "Error 429: Rate limited (hit #%d). Retry-After=%s seconds.",
+                self.rate_limit_hits,
+                retry_after or "unknown",
+            )
         else:
             self.logger.error("Request failed with status code: %s", response.status_code)
             self.logger.debug("Response content (first 500 chars): %s", response.text[:500])
@@ -160,16 +165,19 @@ class Requester:
     def should_backoff(self, threshold: int = 3) -> bool:
         """
         Check if rate limiting has been detected (≥ threshold hits) and reset counter if true.
-        
+
         Args:
             threshold: Number of 429 hits to trigger backoff. Defaults to 3.
-        
+
         Returns:
             True if rate_limit_hits >= threshold (and counter is reset), False otherwise.
         """
         if self.rate_limit_hits >= threshold:
-            self.logger.warning("Rate limit backoff triggered (hits=%d >= threshold=%d). Resetting counter.", self.rate_limit_hits, threshold)
+            self.logger.warning(
+                "Rate limit backoff triggered (hits=%d >= threshold=%d). Resetting counter.",
+                self.rate_limit_hits,
+                threshold,
+            )
             self.rate_limit_hits = 0
             return True
         return False
-    

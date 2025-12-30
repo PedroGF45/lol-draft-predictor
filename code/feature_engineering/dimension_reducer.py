@@ -33,7 +33,7 @@ class DimensionReducer:
     ) -> None:
         """
         Perform dimension reduction using PCA followed by mutual-information based feature selection.
-        
+
         Args:
             data_handler (DataHandler): DataHandler with train/test splits.
             explain_percentage (float): Target percentage of explained variance for PCA (0-1).
@@ -87,7 +87,7 @@ class DimensionReducer:
     ) -> None:
         """
         Fit PCA to achieve target explained variance and transform data.
-        
+
         Args:
             data_handler (DataHandler): DataHandler with train/test splits.
             explain_percentage (float): Target percentage of explained variance.
@@ -146,7 +146,9 @@ class DimensionReducer:
 
         explained_var = self.pca_model.explained_variance_ratio_.sum()
         if verbose:
-            self.logger.info(f"PCA complete with {n_components} components. Cumulative explained variance: {explained_var:.4f}")
+            self.logger.info(
+                f"PCA complete with {n_components} components. Cumulative explained variance: {explained_var:.4f}"
+            )
 
         if plot_dir:
             self._plot_pca_variance(plot_dir)
@@ -158,7 +160,7 @@ class DimensionReducer:
     def _plot_pca_variance(self, output_dir: str) -> None:
         """
         Plot PCA component importance and cumulative explained variance.
-        
+
         Args:
             output_dir (str): Directory to save the plot with auto-generated timestamped filename.
         """
@@ -167,9 +169,9 @@ class DimensionReducer:
 
         # Create directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # Generate timestamped filename
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_pca_variance.png"
         output_path = os.path.join(output_dir, filename)
 
@@ -180,19 +182,19 @@ class DimensionReducer:
 
         # Bar plot for individual explained variance
         x = range(1, len(explained_var) + 1)
-        ax.bar(x, explained_var, alpha=0.7, color='blue', label='Individual explained variance')
+        ax.bar(x, explained_var, alpha=0.7, color="blue", label="Individual explained variance")
 
         # Line plot for cumulative explained variance
-        ax.plot(x, cumsum_var, marker='o', linestyle='-', color='red', label='Cumulative explained variance')
+        ax.plot(x, cumsum_var, marker="o", linestyle="-", color="red", label="Cumulative explained variance")
 
         # Add horizontal line for 90% threshold
-        ax.axhline(y=0.9, color='green', linestyle='--', label='90% threshold')
+        ax.axhline(y=0.9, color="green", linestyle="--", label="90% threshold")
 
-        ax.set_xlabel('Principal Component')
-        ax.set_ylabel('Explained Variance')
-        ax.set_title('PCA: Component Importance and Explained Variance')
-        ax.legend(loc='best')
-        ax.grid(True, linestyle='--', alpha=0.6)
+        ax.set_xlabel("Principal Component")
+        ax.set_ylabel("Explained Variance")
+        ax.set_title("PCA: Component Importance and Explained Variance")
+        ax.legend(loc="best")
+        ax.grid(True, linestyle="--", alpha=0.6)
 
         plt.tight_layout()
         plt.savefig(output_path)
@@ -208,13 +210,13 @@ class DimensionReducer:
     ) -> list:
         """
         Identify relevant features using mutual information with redundancy removal.
-        
+
         Args:
             data_handler (DataHandler): DataHandler with train/test data.
             n_best (int): Number of best features to select.
             correlation_threshold (float): Correlation threshold for redundancy.
             verbose (bool): Verbosity mode.
-            
+
         Returns:
             list: List of selected feature names.
         """
@@ -258,7 +260,12 @@ class DimensionReducer:
 
                 if final_selected:
                     # Check correlation with already selected features
-                    correlation = data_train[final_selected + [current_feature]].corr()[current_feature].abs().drop(current_feature)
+                    correlation = (
+                        data_train[final_selected + [current_feature]]
+                        .corr()[current_feature]
+                        .abs()
+                        .drop(current_feature)
+                    )
                     if (correlation > correlation_threshold).any():
                         if verbose:
                             corr_features = correlation[correlation > correlation_threshold].index.tolist()
@@ -277,10 +284,12 @@ class DimensionReducer:
             self.logger.error(f"Error during feature selection: {e}")
             return []
 
-    def _apply_feature_selection(self, data_handler: DataHandler, selected_features: list, verbose: bool = True) -> None:
+    def _apply_feature_selection(
+        self, data_handler: DataHandler, selected_features: list, verbose: bool = True
+    ) -> None:
         """
         Apply feature selection by keeping only selected features.
-        
+
         Args:
             data_handler (DataHandler): DataHandler to update.
             selected_features (list): List of feature names to keep.
@@ -298,15 +307,18 @@ class DimensionReducer:
             available_features = [f for f in selected_features if f in data_train.columns]
 
             if verbose:
-                self.logger.info(f"Before feature selection: train shape={data_train.shape}, test shape={data_test.shape}")
+                self.logger.info(
+                    f"Before feature selection: train shape={data_train.shape}, test shape={data_test.shape}"
+                )
 
             data_handler.set_data_train(data_train[available_features])
             data_handler.set_data_test(data_test[available_features])
 
             if verbose:
-                self.logger.info(f"After feature selection: train shape={data_train[available_features].shape}, test shape={data_test[available_features].shape}")
+                self.logger.info(
+                    f"After feature selection: train shape={data_train[available_features].shape}, test shape={data_test[available_features].shape}"
+                )
                 self.logger.info(f"Selected features: {available_features}")
 
         except Exception as e:
             self.logger.error(f"Error applying feature selection: {e}")
-        

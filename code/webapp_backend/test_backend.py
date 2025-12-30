@@ -22,16 +22,17 @@ if __name__ == "__main__":
         print("Feature names count:", len(app_module._FEATURE_NAMES) if app_module._FEATURE_NAMES else 0)
         print("Test metrics:", json.dumps(app_module._TEST_METRICS))
         print("Model type:", type(app_module._MODEL).__name__)
-        
+
         # Check if model is on GPU
         if hasattr(app_module._MODEL, "device"):
             print("Model device:", app_module._MODEL.device)
-        
+
         # Lightweight preprocessor smoke test (no external API calls)
         try:
             preproc = getattr(app_module, "_PREPROCESSOR", None)
             if preproc is not None:
                 import pandas as pd
+
                 cols = getattr(preproc, "pca_input_features", [])
                 if cols:
                     df = pd.DataFrame([[0.0] * len(cols)], columns=cols)
@@ -44,6 +45,7 @@ if __name__ == "__main__":
     except Exception as e:
         print("FAILED:", e)
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
     sys.exit(0)

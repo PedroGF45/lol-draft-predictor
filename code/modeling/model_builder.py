@@ -24,7 +24,12 @@ from sklearn.linear_model import (
     Lasso,
     SGDClassifier,
 )
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier, GradientBoostingRegressor
+from sklearn.ensemble import (
+    RandomForestClassifier,
+    RandomForestRegressor,
+    GradientBoostingClassifier,
+    GradientBoostingRegressor,
+)
 from sklearn.svm import SVC, SVR
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
@@ -40,8 +45,8 @@ from modeling.deep_learner import DeepLearningClassifier
 class ModelBuilder:
     """
     Builds and optimizes multiple ML models for draft prediction.
-    
-    Orchestrates the pipeline: model selection → hyperparameter optimization via GA → 
+
+    Orchestrates the pipeline: model selection → hyperparameter optimization via GA →
     cross-validation → test set evaluation → model persistence.
     """
 
@@ -61,7 +66,7 @@ class ModelBuilder:
     ):
         """
         Initialize ModelBuilder.
-        
+
         Args:
             X_train: Training features (n_samples, n_features)
             y_train: Training labels
@@ -101,11 +106,13 @@ class ModelBuilder:
                     if numeric_cols:
                         transformers.append(("num", StandardScaler(), numeric_cols))
                     if categorical_cols:
-                        transformers.append((
-                            "cat",
-                            OneHotEncoder(handle_unknown="ignore", sparse=False),
-                            categorical_cols,
-                        ))
+                        transformers.append(
+                            (
+                                "cat",
+                                OneHotEncoder(handle_unknown="ignore", sparse=False),
+                                categorical_cols,
+                            )
+                        )
 
                     if transformers:
                         self.preprocessor = ColumnTransformer(transformers=transformers, remainder="drop")
@@ -158,7 +165,7 @@ class ModelBuilder:
         self.best_model_name = None
         self.best_model_params = None
         self.best_score = float("-inf") if is_classification else float("inf")
-        
+
         # History tracking
         self.history = {}  # Stores results for each model
         self.models_built = []  # List of (model_name, model_instance, scores)
@@ -173,9 +180,7 @@ class ModelBuilder:
         logger = logging.getLogger("ModelBuilder")
         if not logger.handlers:
             handler = logging.StreamHandler()
-            handler.setFormatter(
-                logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-            )
+            handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
             logger.addHandler(handler)
             logger.setLevel(logging.INFO)
         return logger
@@ -183,7 +188,7 @@ class ModelBuilder:
     def build_models(self, models_dict: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         Build and optimize multiple models.
-        
+
         Args:
             models_dict: Dictionary mapping model names to their configurations.
                         Example:
@@ -196,7 +201,7 @@ class ModelBuilder:
                                 'penalty_params': ('l1', 'l2')
                             }
                         }
-        
+
         Returns:
             Dictionary with best model info and complete history
         """
@@ -204,7 +209,7 @@ class ModelBuilder:
             models_dict = self._get_default_models()
 
         self.logger.info(f"Building {len(models_dict)} models...")
-        
+
         # Initialize optimizer
         optimizer = ModelOptimizer(
             self.X_train_scaled,
@@ -226,10 +231,8 @@ class ModelBuilder:
 
             try:
                 # Optimize hyperparameters
-                opt_results = self._optimize_model(
-                    optimizer, model_class, model_name, optimizer_params
-                )
-                
+                opt_results = self._optimize_model(optimizer, model_class, model_name, optimizer_params)
+
                 if opt_results is None:
                     self.logger.warning(f"Optimization failed for {model_name}")
                     continue
@@ -237,9 +240,7 @@ class ModelBuilder:
                 best_params, best_model, opt_time = opt_results
 
                 # Cross-validation
-                cv_results = self._cross_validate_model(
-                    best_model, model_name
-                )
+                cv_results = self._cross_validate_model(best_model, model_name)
 
                 # Test set evaluation
                 test_results = self._evaluate_test_set(best_model, model_name)
@@ -295,37 +296,19 @@ class ModelBuilder:
         ):
             result = self._train_final_deep_learning_model(**params)
         elif model_identifier in [LogisticRegression, LinearRegression]:
-            result = optimizer.optimize_linear_model(
-                model_class=model_identifier,
-                **params
-            )
+            result = optimizer.optimize_linear_model(model_class=model_identifier, **params)
         elif model_identifier in [SVC, SVR]:
-            result = optimizer.optimize_svm(
-                model_class=model_identifier,
-                **params
-            )
+            result = optimizer.optimize_svm(model_class=model_identifier, **params)
         elif model_identifier in [RandomForestClassifier, RandomForestRegressor]:
-            result = optimizer.optimize_random_forest(
-                model_class=model_identifier,
-                **params
-            )
+            result = optimizer.optimize_random_forest(model_class=model_identifier, **params)
         elif model_identifier in [GradientBoostingClassifier, GradientBoostingRegressor]:
-            result = optimizer.optimize_gradient_boosting(
-                model_class=model_identifier,
-                **params
-            )
+            result = optimizer.optimize_gradient_boosting(model_class=model_identifier, **params)
         elif model_identifier in [KNeighborsClassifier, KNeighborsRegressor]:
-            result = optimizer.optimize_knn(
-                model_class=model_identifier,
-                **params
-            )
+            result = optimizer.optimize_knn(model_class=model_identifier, **params)
         elif model_identifier is SGDClassifier:
             result = self._optimize_sgd(**params)
         elif model_identifier in [MLPClassifier, MLPRegressor]:
-            result = optimizer.optimize_mlp(
-                model_class=model_identifier,
-                **params
-            )
+            result = optimizer.optimize_mlp(model_class=model_identifier, **params)
         else:
             self.logger.warning(f"Unsupported model identifier: {model_identifier}")
             return None
@@ -412,7 +395,10 @@ class ModelBuilder:
 
             start = time.time()
             dl.fit(
-                X_tr, y_tr, X_val, y_val,
+                X_tr,
+                y_tr,
+                X_val,
+                y_val,
                 num_epochs=30,
                 learning_rate=0.001,
                 optimizer_name="adam",
@@ -516,7 +502,10 @@ class ModelBuilder:
 
         start = time.time()
         dl.fit(
-            X_tr, y_tr, X_val, y_val,
+            X_tr,
+            y_tr,
+            X_val,
+            y_val,
             num_epochs=epochs,
             learning_rate=learning_rate,
             optimizer_name="adam",
@@ -540,21 +529,19 @@ class ModelBuilder:
         if current_score is None:
             return
 
-        is_better = (
-            (self.is_classification and current_score > self.best_score) or
-            (not self.is_classification and current_score < self.best_score)
+        is_better = (self.is_classification and current_score > self.best_score) or (
+            not self.is_classification and current_score < self.best_score
         )
 
         if is_better:
             self.best_model = model
             self.best_model_name = model_name
             self.best_score = current_score
-            self.logger.info(
-                f"New best model: {model_name} "
-                f"({metric_key}={current_score:.4f})"
-            )
+            self.logger.info(f"New best model: {model_name} " f"({metric_key}={current_score:.4f})")
 
-    def _save_model(self, model_name: str, model, params: Dict[str, Any], cv_metrics: Dict[str, Any], test_metrics: Dict[str, Any]):
+    def _save_model(
+        self, model_name: str, model, params: Dict[str, Any], cv_metrics: Dict[str, Any], test_metrics: Dict[str, Any]
+    ):
         """Save model artifacts, params, and metrics in a structured run directory and update best tracking."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = os.path.join(self.output_path, model_name, timestamp)
@@ -579,11 +566,16 @@ class ModelBuilder:
 
             # Persist metrics and params
             import json
+
             with open(metrics_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "cv_metrics": cv_metrics,
-                    "test_metrics": test_metrics,
-                }, f, indent=2)
+                json.dump(
+                    {
+                        "cv_metrics": cv_metrics,
+                        "test_metrics": test_metrics,
+                    },
+                    f,
+                    indent=2,
+                )
 
             with open(params_path, "w", encoding="utf-8") as f:
                 json.dump(params, f, indent=2)
@@ -605,7 +597,11 @@ class ModelBuilder:
                 "feature_names": feature_names,
                 "artifacts": {
                     "model": os.path.relpath(model_path, self.output_path),
-                    "preprocessor": os.path.relpath(prep_path, self.output_path) if getattr(self, "preprocessor", None) is not None else None,
+                    "preprocessor": (
+                        os.path.relpath(prep_path, self.output_path)
+                        if getattr(self, "preprocessor", None) is not None
+                        else None
+                    ),
                     "metrics": os.path.relpath(metrics_path, self.output_path),
                     "params": os.path.relpath(params_path, self.output_path),
                 },
@@ -680,9 +676,7 @@ class ModelBuilder:
                     }
                     with open(overall_file, "w", encoding="utf-8") as f:
                         json.dump(overall, f, indent=2)
-                    self.logger.info(
-                        f"Updated best_overall.json: {model_name} {primary_metric}={current_score:.4f}"
-                    )
+                    self.logger.info(f"Updated best_overall.json: {model_name} {primary_metric}={current_score:.4f}")
 
         except Exception as e:
             self.logger.error(f"Failed to save model artifacts: {e}")
@@ -693,19 +687,19 @@ class ModelBuilder:
             self.logger.warning("No models built successfully")
             return
 
-        self.logger.info("\n" + "="*80)
+        self.logger.info("\n" + "=" * 80)
         self.logger.info("MODEL BUILDING SUMMARY")
-        self.logger.info("="*80)
+        self.logger.info("=" * 80)
 
         for model_name, results in self.history.items():
             self.logger.info(f"\n{model_name}:")
             self.logger.info(f"  Optimization Time: {results['optimization_time']:.2f}s")
-            
+
             cv_metrics = results["cv_metrics"]
             self.logger.info(f"  CV Metrics (μ±σ):")
             for metric, (mean, std) in cv_metrics.items():
                 self.logger.info(f"    {metric}: {mean:.4f} ± {std:.4f}")
-            
+
             test_metrics = results["test_metrics"]
             self.logger.info(f"  Test Metrics:")
             for metric, value in test_metrics.items():

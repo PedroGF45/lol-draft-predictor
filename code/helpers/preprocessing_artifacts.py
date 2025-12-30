@@ -80,8 +80,16 @@ class PreprocessingArtifacts:
         # Apply training QuantileTransformer and StandardScaler on numeric features
         if self.numeric_features:
             # Use the feature names the transformers were actually fit on when available
-            qt_names = getattr(self.quantile_transformer, "feature_names_in_", None) if self.quantile_transformer is not None else None
-            ss_names = getattr(self.standard_scaler_input, "feature_names_in_", None) if self.standard_scaler_input is not None else None
+            qt_names = (
+                getattr(self.quantile_transformer, "feature_names_in_", None)
+                if self.quantile_transformer is not None
+                else None
+            )
+            ss_names = (
+                getattr(self.standard_scaler_input, "feature_names_in_", None)
+                if self.standard_scaler_input is not None
+                else None
+            )
             numeric_cols = list(qt_names or ss_names or self.numeric_features)
 
             # Align to full numeric feature set used during training before transforms
@@ -90,13 +98,15 @@ class PreprocessingArtifacts:
                 if self.quantile_transformer is not None:
                     qt_out = self.quantile_transformer.transform(numeric_aligned)
                     numeric_aligned = (
-                        qt_out if isinstance(qt_out, pd.DataFrame)
+                        qt_out
+                        if isinstance(qt_out, pd.DataFrame)
                         else pd.DataFrame(qt_out, columns=numeric_cols, index=work.index)
                     )
                 if self.standard_scaler_input is not None:
                     ss_out = self.standard_scaler_input.transform(numeric_aligned)
                     numeric_aligned = (
-                        ss_out if isinstance(ss_out, pd.DataFrame)
+                        ss_out
+                        if isinstance(ss_out, pd.DataFrame)
                         else pd.DataFrame(ss_out, columns=numeric_cols, index=work.index)
                     )
                 # Replace numeric columns in one shot to avoid fragmentation
@@ -120,7 +130,8 @@ class PreprocessingArtifacts:
 
         # Build PCA component DataFrame
         pca_df = (
-            pca_out if isinstance(pca_out, pd.DataFrame)
+            pca_out
+            if isinstance(pca_out, pd.DataFrame)
             else pd.DataFrame(pca_out, columns=self.pca_columns, index=df.index)
         ).astype(np.float32)
 

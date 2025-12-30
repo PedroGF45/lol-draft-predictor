@@ -44,33 +44,32 @@ logger.info(f"\nStep 1: Loading existing matches from {PREPROCESSED_MATCHES_PATH
 if os.path.exists(PREPROCESSED_MATCHES_PATH):
     matches_df = parquet_handler.read_parquet(PREPROCESSED_MATCHES_PATH, load_percentage=1.0)
     logger.info(f"Loaded {len(matches_df)} matches")
-    
+
     # Check if we have the required columns
-    if 'match_id' not in matches_df.columns:
+    if "match_id" not in matches_df.columns:
         logger.error("ERROR: 'match_id' column not found in matches dataframe!")
         exit(1)
-    
-    if 'game_version' not in matches_df.columns:
+
+    if "game_version" not in matches_df.columns:
         logger.warning("WARNING: 'game_version' column not found. Using 'unknown' as default.")
-        matches_df['game_version'] = 'unknown'
-    
+        matches_df["game_version"] = "unknown"
+
     # Show sample
     logger.info(f"\nSample of data to register:")
     logger.info(f"\n{matches_df[['match_id', 'game_version']].head(10)}")
-    
+
     # Register matches with registry
     logger.info(f"\nRegistering {len(matches_df)} matches with registry...")
     collection_metadata = {
-        'source': 'migration_script',
-        'original_file': os.path.basename(PREPROCESSED_MATCHES_PATH),
-        'migration_date': pd.Timestamp.now().isoformat()
+        "source": "migration_script",
+        "original_file": os.path.basename(PREPROCESSED_MATCHES_PATH),
+        "migration_date": pd.Timestamp.now().isoformat(),
     }
-    
+
     new_matches_df, duplicates = registry.register_matches(
-        matches_df[['match_id', 'game_version']],
-        collection_metadata=collection_metadata
+        matches_df[["match_id", "game_version"]], collection_metadata=collection_metadata
     )
-    
+
     logger.info(f"✓ Registration complete: {len(new_matches_df)} new matches, {duplicates} duplicates")
 else:
     logger.error(f"ERROR: File not found: {PREPROCESSED_MATCHES_PATH}")
@@ -92,26 +91,26 @@ TEST_DATA_PATH = os.path.join(CLEANED_DATA_DIR, "data_test.parquet")
 
 if os.path.exists(TRAIN_DATA_PATH) and os.path.exists(TEST_DATA_PATH):
     logger.info(f"\nLoading existing train/test splits...")
-    
+
     train_df = parquet_handler.read_parquet(TRAIN_DATA_PATH, load_percentage=1.0)
     test_df = parquet_handler.read_parquet(TEST_DATA_PATH, load_percentage=1.0)
-    
+
     logger.info(f"Train set: {len(train_df)} rows")
     logger.info(f"Test set: {len(test_df)} rows")
-    
+
     # Extract match keys from splits
     # Note: This assumes match_id and game_version columns exist in the split data
-    if 'match_id' in train_df.columns and 'game_version' in train_df.columns:
-        train_keys = set(zip(train_df['match_id'].astype(str), train_df['game_version'].astype(str)))
-        test_keys = set(zip(test_df['match_id'].astype(str), test_df['game_version'].astype(str)))
-        
+    if "match_id" in train_df.columns and "game_version" in train_df.columns:
+        train_keys = set(zip(train_df["match_id"].astype(str), train_df["game_version"].astype(str)))
+        test_keys = set(zip(test_df["match_id"].astype(str), test_df["game_version"].astype(str)))
+
         logger.info(f"\nExtracted {len(train_keys)} unique train matches")
         logger.info(f"Extracted {len(test_keys)} unique test matches")
-        
+
         # Register splits with registry
         logger.info(f"\nRegistering split assignments...")
         registry.assign_splits(train_keys, test_keys)
-        
+
         # Validate no leakage
         logger.info(f"Validating data integrity...")
         try:
@@ -146,10 +145,10 @@ logger.info(f"Unassigned Matches:   {stats['unassigned_matches']:>8}")
 logger.info(f"Collection Sessions:  {stats['collection_sessions']:>8}")
 logger.info("-" * 50)
 
-if stats['game_versions']:
+if stats["game_versions"]:
     logger.info(f"\n{'Game Version Breakdown':^50}")
     logger.info("-" * 50)
-    for version, count in sorted(stats['game_versions'].items()):
+    for version, count in sorted(stats["game_versions"].items()):
         logger.info(f"{version:<30} {count:>8} matches")
     logger.info("-" * 50)
 
