@@ -3,17 +3,22 @@ import sys
 import json
 import joblib
 import numpy as np
+import hashlib
+import time
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+from collections import defaultdict
 
 # Load .env file from repository root
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import redis.asyncio as redis
 
 # Ensure workspace 'code' folder is importable for model classes
 CODE_ROOT = os.path.join(REPO_ROOT, "code")
@@ -39,6 +44,23 @@ import pandas as pd
 import logging
 
 app = FastAPI(title="LoL Draft Predictor API", version="0.1.0")
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Restrict in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Rate limiting state
+_RATE_LIMIT_STORE: Dict[str, List[float]] = defaultdict(list)
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30"))
+
+# Redis client
+_REDIS_CLIENT: Optional[redis.Redis] = None
 
 class PredictRequest(BaseModel):
     # Either provide ordered list of values or feature dict
@@ -84,6 +106,84 @@ _PARQUET_HANDLER = None
 _FEATURE_ENGINEER = None
 _LOGGER = None
 _RANDOM_SEED = 42
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Rate limiting: max requests per IP per window."""
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Skip rate limiting for health checks
+    if request.url.path == "/health":
+        return await call_next(request)
+    
+    current_time = time.time()
+    
+    # Clean old requests outside window
+    _RATE_LIMIT_STORE[client_ip] = [
+        timestamp for timestamp in _RATE_LIMIT_STORE[client_ip]
+        if current_time - timestamp < _RATE_LIMIT_WINDOW
+    ]
+    
+    # Check limit
+    if len(_RATE_LIMIT_STORE[client_ip]) >= _RATE_LIMIT_MAX_REQUESTS:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "Rate limit exceeded",
+                "detail": f"Maximum {_RATE_LIMIT_MAX_REQUESTS} requests per {_RATE_LIMIT_WINDOW}s",
+                "retry_after": int(_RATE_LIMIT_WINDOW)
+            }
+        )
+    
+    # Add current request
+    _RATE_LIMIT_STORE[client_ip].append(current_time)
+    
+    response = await call_next(request)
+    return response
+
+
+async def get_redis():
+    """Get or create Redis client."""
+    global _REDIS_CLIENT
+    if _REDIS_CLIENT is None:
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
+            try:
+                _REDIS_CLIENT = await redis.from_url(
+                    redis_url,
+                    encoding="utf-8",
+                    decode_responses=True
+                )
+                await _REDIS_CLIENT.ping()
+                if _LOGGER:
+                    _LOGGER.info("Redis connected")
+            except Exception as e:
+                if _LOGGER:
+                    _LOGGER.warning(f"Redis connection failed: {e}")
+                _REDIS_CLIENT = None
+    return _REDIS_CLIENT
+
+
+async def cache_get(key: str) -> Optional[str]:
+    """Get value from Redis cache."""
+    r = await get_redis()
+    if r:
+        try:
+            return await r.get(key)
+        except Exception:
+            return None
+    return None
+
+
+async def cache_set(key: str, value: str, ttl: int = 3600):
+    """Set value in Redis cache with TTL."""
+    r = await get_redis()
+    if r:
+        try:
+            await r.setex(key, ttl, value)
+        except Exception:
+            pass
 
 
 def get_models_path() -> str:
@@ -369,13 +469,24 @@ def predict(req: PredictRequest):
 
 
 @app.post("/predict-match", response_model=MatchPredictResponse)
-def predict_match(req: MatchPredictRequest):
+async def predict_match(req: MatchPredictRequest):
     """Predict match outcome from match ID by running full pipeline."""
     if not _REQUESTER or not _MATCH_FETCHER or not _FEATURE_ENGINEER:
         raise HTTPException(status_code=500, detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.")
     
     if _MODEL is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
+    
+    # Check cache first
+    cache_key = f"match_prediction:{req.match_id}"
+    cached = await cache_get(cache_key)
+    if cached:
+        try:
+            result = json.loads(cached)
+            _LOGGER.info(f"Cache hit for match {req.match_id}")
+            return MatchPredictResponse(**result)
+        except Exception:
+            pass
     
     try:
         # Process into DataFrame (use MatchFetcher helper on match_id)
@@ -578,12 +689,17 @@ def predict_match(req: MatchPredictRequest):
         
         predicted_winner = "red" if team_red_prob > team_blue_prob else "blue"
         
-        return MatchPredictResponse(
+        result = MatchPredictResponse(
             match_id=req.match_id,
             team_red_win_probability=team_red_prob,
             team_blue_win_probability=team_blue_prob,
             predicted_winner=predicted_winner
         )
+        
+        # Cache for 1 hour
+        await cache_set(cache_key, result.model_dump_json(), ttl=3600)
+        
+        return result
         
     except HTTPException:
         raise

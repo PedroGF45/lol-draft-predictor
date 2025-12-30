@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: lol-draft-predictor
+    runtime: python
+    plan: free
+    buildCommand: pip install -r code/webapp_backend/requirements.txt
+    startCommand: cd code/webapp_backend && uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: MODELS_PATH
+        value: /opt/render/project/src/models
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: 30
+      - key: RIOT_API_KEY
+        sync: false  # Manual secret
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: lol-predictor-redis
+          property: connectionString
+    healthCheckPath: /health
+
+  - type: redis
+    name: lol-predictor-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
