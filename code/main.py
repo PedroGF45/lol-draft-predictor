@@ -48,11 +48,9 @@ print("RIOT_API_KEY: ", RIOT_API_KEY)
 
 region_v4 = "euw1"
 region_v5 = "europe"
-base_url_v4 = f'https://{region_v4}.api.riotgames.com'
-base_url_v5 = f'https://{region_v5}.api.riotgames.com'
-headers = {
-    "X-Riot-Token": RIOT_API_KEY
-}
+base_url_v4 = f"https://{region_v4}.api.riotgames.com"
+base_url_v5 = f"https://{region_v5}.api.riotgames.com"
+headers = {"X-Riot-Token": RIOT_API_KEY}
 
 requester = Requester(base_url_v4=base_url_v4, base_url_v5=base_url_v5, headers=headers, logger=logger)
 
@@ -87,20 +85,22 @@ logger.info("╚═════════════════════�
 
 # Phase 1: Discover matches (uncomment to run discovery)
 # The master_registry automatically filters out duplicates!
-data_miner = DataMiner(logger=logger, 
-                       parquet_handler=parquet_handler,
-                       requester=requester, 
-                       raw_data_path=RAW_DATA_PATH, 
-                       patient_zero_game_name=game_name, 
-                       patient_zero_tag_line=tag_line,
-                       checkpoint_loading_path="F:\\Code\\lol-draft-predictor\\data\\exploration\\checkpoints\\20251224_145434_462762_players_118967_matches.pkl",
-                       checkpoint_save_path=CHECKPOINT_PATH,
-                       master_registry=master_registry,
-                       max_workers=DATA_MINER_MAX_WORKERS)  # ← Registry prevents duplicates
-                       
-response = data_miner.start_search(search_mode="matches", 
-                                  target_number_of_players=1000,
-                                  target_number_of_matches=1000000) 
+data_miner = DataMiner(
+    logger=logger,
+    parquet_handler=parquet_handler,
+    requester=requester,
+    raw_data_path=RAW_DATA_PATH,
+    patient_zero_game_name=game_name,
+    patient_zero_tag_line=tag_line,
+    checkpoint_loading_path="F:\\Code\\lol-draft-predictor\\data\\exploration\\checkpoints\\20251229_171629_1300293_players_427407_matches.pkl",
+    checkpoint_save_path=CHECKPOINT_PATH,
+    master_registry=master_registry,
+    max_workers=DATA_MINER_MAX_WORKERS,
+)  # ← Registry prevents duplicates
+
+response = data_miner.start_search(
+    search_mode="matches", target_number_of_players=1000, target_number_of_matches=1000000
+)
 
 """
 # Phase 2: Fetch and enrich matches
