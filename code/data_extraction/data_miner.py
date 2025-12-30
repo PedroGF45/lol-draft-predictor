@@ -162,6 +162,17 @@ class DataMiner():
 
         pbar = tqdm(total=target_total, initial=min(current_count, target_total), desc=desc, unit="items")
 
+        # Calculate checkpoint interval based on target size
+        if target_total < 1000:
+            checkpoint_interval = 100
+        elif target_total < 10000:
+            checkpoint_interval = 1000
+        else:
+            checkpoint_interval = 10000
+    
+        last_checkpoint_count = current_count  # Track last checkpoint count
+        self.logger.info(f"Checkpoint interval set to {checkpoint_interval} (target: {target_total})")
+
         while len(self.players_queue) > 0 and not self._has_reached_target(mode=search_mode, target_players=target_number_of_players, target_matches=target_number_of_matches):
 
             self.logger.info(f'Number of current players: {len(self.seen_players)}\n Number of current matches: {len(self.seen_matches)}')
@@ -208,21 +219,25 @@ class DataMiner():
                 current_count = new_count
             pbar.set_postfix(players=len(self.seen_players), matches=len(self.seen_matches), workers=self.max_workers)
 
-            checkpoint_dict = {}
-            checkpoint_dict["players_queue"] = self.players_queue
-            checkpoint_dict["seen_players"] = self.seen_players
-            checkpoint_dict["seen_matches"] = self.seen_matches
+            # Only save checkpoint at intervals
+            items_since_last_checkpoint = new_count - last_checkpoint_count
+            if items_since_last_checkpoint >= checkpoint_interval:
+                checkpoint_dict = {}
+                checkpoint_dict["players_queue"] = self.players_queue
+                checkpoint_dict["seen_players"] = self.seen_players
+                checkpoint_dict["seen_matches"] = self.seen_matches
 
-            # sufix with detailed timestamp number of players and matches
-            timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
             
-            if self.checkpoint_save_path:
-                os.makedirs(self.checkpoint_save_path, exist_ok=True)
-                checkpoint_path = os.path.join(self.checkpoint_save_path, f"{timestamp}_{len(self.seen_players)}_players_{len(self.seen_matches)}_matches.pkl")
-            else:
-                raise ValueError("checkpoint_save_path must be provided to save checkpoints")
+                if self.checkpoint_save_path:
+                    os.makedirs(self.checkpoint_save_path, exist_ok=True)
+                    checkpoint_path = os.path.join(self.checkpoint_save_path, f"{timestamp}_{len(self.seen_players)}_players_{len(self.seen_matches)}_matches.pkl")
+                else:
+                    raise ValueError("checkpoint_save_path must be provided to save checkpoints")
                 
-            save_checkpoint(logger=self.logger, state=checkpoint_dict, path=checkpoint_path)
+                save_checkpoint(logger=self.logger, state=checkpoint_dict, path=checkpoint_path)
+                last_checkpoint_count = new_count
+                self.logger.info(f"Checkpoint saved at {new_count} items")
             
             # Check for rate limiting and apply backoff
             if self.requester.should_backoff(threshold=3):
