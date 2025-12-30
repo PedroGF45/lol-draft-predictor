@@ -26,10 +26,3 @@ repos:
     hooks:
       - id: isort
         args: ['--profile=black', '--line-length=120']
-
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
-    hooks:
-      - id: flake8
-        args: ['--max-line-length=120', '--extend-ignore=E203,W503']
-        exclude: __pycache__
