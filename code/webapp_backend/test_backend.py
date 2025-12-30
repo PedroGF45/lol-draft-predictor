@@ -1,6 +1,6 @@
+import json
 import os
 import sys
-import json
 
 # Add workspace code to sys.path
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))

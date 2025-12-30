@@ -5,12 +5,13 @@ Use this script when you already have preprocessed matches/players data and want
 initialize the registry without re-running the entire data collection pipeline.
 """
 
-from helpers.master_data_registry import MasterDataRegistry
-from helpers.parquet_handler import ParquetHandler
-import pandas as pd
 import logging
 import os
+
+import pandas as pd
 from dotenv import load_dotenv
+from helpers.master_data_registry import MasterDataRegistry
+from helpers.parquet_handler import ParquetHandler
 
 logging.basicConfig(
     level=logging.INFO,

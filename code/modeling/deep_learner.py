@@ -5,30 +5,30 @@ Implements PyTorch-based deep neural networks for both classification and regres
 Includes training, validation, early stopping, and comprehensive evaluation.
 """
 
+import logging
 import os
 import time
-import logging
+from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sns
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
-from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Optional, Any
-from datetime import datetime
-
 from sklearn.metrics import (
     accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
     confusion_matrix,
-    mean_squared_error,
+    f1_score,
     mean_absolute_error,
+    mean_squared_error,
+    precision_score,
     r2_score,
+    recall_score,
 )
-import matplotlib.pyplot as plt
-import seaborn as sns
+from torch.utils.data import DataLoader, TensorDataset
 
 # Default network architecture
 DEFAULT_LAYER_CONFIG: List[Tuple[int, float]] = [

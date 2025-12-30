@@ -5,27 +5,35 @@ Hyperparameter optimization using genetic algorithms (GA) for various sklearn mo
 Supports both classification and regression tasks.
 """
 
-import random
 import copy
-import time
-import logging
-import warnings
-import numpy as np
 import inspect
-from typing import Dict, Any, Optional, Tuple, Callable
+import logging
+import random
+import time
+import warnings
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from sklearn.linear_model import LogisticRegression, LinearRegression, Ridge, Lasso
+import numpy as np
 from sklearn.ensemble import (
-    RandomForestClassifier,
-    RandomForestRegressor,
     GradientBoostingClassifier,
     GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
 )
-from sklearn.svm import SVC, SVR
+from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    precision_score,
+    r2_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.svm import SVC, SVR
 
 warnings.filterwarnings("ignore")
 

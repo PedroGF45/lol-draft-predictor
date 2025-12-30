@@ -1,8 +1,8 @@
+import logging
 import os
 import pickle
 import tempfile
 from typing import Any, Optional
-import logging
 
 
 def save_checkpoint(logger: logging.Logger, state: dict[str, Any], path: str) -> None:

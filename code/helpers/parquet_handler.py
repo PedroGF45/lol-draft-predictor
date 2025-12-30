@@ -1,6 +1,7 @@
-import pandas as pd
 import os
 from logging import Logger
+
+import pandas as pd
 
 
 class ParquetHandler:

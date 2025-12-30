@@ -1,11 +1,12 @@
-from data_preparation.data_handler import DataHandler
-from helpers.parquet_handler import ParquetHandler
-from logging import Logger
 import os
 from datetime import datetime
-import pandas as pd
-import numpy as np
+from logging import Logger
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from data_preparation.data_handler import DataHandler
+from helpers.parquet_handler import ParquetHandler
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 from sklearn.preprocessing import StandardScaler

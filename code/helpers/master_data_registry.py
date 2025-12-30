@@ -13,13 +13,14 @@ Key Features:
 - Query capabilities for duplicate detection
 """
 
+import logging
 import os
 import pickle
-import pandas as pd
 from datetime import datetime
-from typing import Set, Dict, Optional, List, Tuple
-import logging
 from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import pandas as pd
 
 
 class MasterDataRegistry:

@@ -1,14 +1,14 @@
+import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Optional
+
+import pandas as pd
 from data_extraction.requester import Requester
 from data_extraction.schemas import MATCH_SCHEMA, PLAYER_HISTORY_SCHEMA
-from helpers.parquet_handler import ParquetHandler
-from helpers.checkpoint import save_checkpoint, load_checkpoint
+from helpers.checkpoint import load_checkpoint, save_checkpoint
 from helpers.master_data_registry import MasterDataRegistry
-
-import os
-import logging
-import pandas as pd
-from typing import Any, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from helpers.parquet_handler import ParquetHandler
 from tqdm import tqdm
 
 

@@ -1,24 +1,25 @@
+import hashlib
+import json
 import os
 import sys
-import json
+import time
+from collections import defaultdict
+from typing import Dict, List, Optional
+
 import joblib
 import numpy as np
-import hashlib
-import time
-from typing import Dict, List, Optional
 from dotenv import load_dotenv
-from collections import defaultdict
 
 # Load .env file from repository root
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import redis.asyncio as redis
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 # Ensure workspace 'code' folder is importable for model classes
 CODE_ROOT = os.path.join(REPO_ROOT, "code")
@@ -32,16 +33,18 @@ except Exception:
     # If torch isn't available, DL models won't load; handled at runtime
     DeepLearningClassifier = None  # type: ignore
 
+import logging
+
+import pandas as pd
+from data_extraction.match_fetcher import MatchFetcher
+
 # Import pipeline components for match processing
 from data_extraction.requester import Requester
-from data_extraction.match_fetcher import MatchFetcher
-from data_preparation.data_handler import DataHandler
 from data_preparation.data_cleaner import DataCleaner
+from data_preparation.data_handler import DataHandler
 from feature_engineering.feature_engineer import FeatureEngineer
-from helpers.parquet_handler import ParquetHandler
 from helpers.master_data_registry import MasterDataRegistry
-import pandas as pd
-import logging
+from helpers.parquet_handler import ParquetHandler
 
 app = FastAPI(title="LoL Draft Predictor API", version="0.1.0")
 
@@ -534,11 +537,11 @@ async def predict_match(req: MatchPredictRequest):
 
         # Join match and player data (similar to DataHandler.join_match_and_player_data logic)
         # This creates aggregated player stats per match
-        from data_preparation.data_handler import DataHandler as DH
-
         # Use the join method to combine match and player history data
         # We'll save to temporary paths and load them back
         import tempfile
+
+        from data_preparation.data_handler import DataHandler as DH
 
         with tempfile.TemporaryDirectory() as tmpdir:
             match_tmp = os.path.join(tmpdir, "match.parquet")

@@ -1,11 +1,12 @@
-from helpers.parquet_handler import ParquetHandler
-from logging import Logger
-import pandas as pd
-import numpy as np
 import os
+from logging import Logger
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from helpers.parquet_handler import ParquetHandler
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.inspection import permutation_importance
 
 

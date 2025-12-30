@@ -1,9 +1,10 @@
-from helpers.parquet_handler import ParquetHandler
-from data_preparation.data_handler import DataHandler
 from logging import Logger
-import pandas as pd
+
 import numpy as np
-from sklearn.preprocessing import StandardScaler, QuantileTransformer
+import pandas as pd
+from data_preparation.data_handler import DataHandler
+from helpers.parquet_handler import ParquetHandler
+from sklearn.preprocessing import QuantileTransformer, StandardScaler
 
 
 class FeatureEngineer:

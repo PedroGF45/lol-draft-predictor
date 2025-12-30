@@ -1,17 +1,18 @@
-from data_extraction.requester import Requester
-from helpers.checkpoint import save_checkpoint, load_checkpoint
-from helpers.parquet_handler import ParquetHandler
-from helpers.master_data_registry import MasterDataRegistry
-from data_extraction.schemas import PLAYERS_SCHEMA, MATCHES_SCHEMA
-from typing import List, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import deque
-import time
 import logging
+import os
+import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Optional
+
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import os
+from data_extraction.requester import Requester
+from data_extraction.schemas import MATCHES_SCHEMA, PLAYERS_SCHEMA
+from helpers.checkpoint import load_checkpoint, save_checkpoint
+from helpers.master_data_registry import MasterDataRegistry
+from helpers.parquet_handler import ParquetHandler
 from tqdm import tqdm
 
 

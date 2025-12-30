@@ -1,11 +1,11 @@
+import os
+from logging import Logger
+
+import pandas as pd
 from data_extraction.requester import Requester
 from data_preparation.data_handler import DataHandler
-from helpers.parquet_handler import ParquetHandler
 from helpers.champion_ids import fetch_latest_champion_ids
-
-from logging import Logger
-import pandas as pd
-import os
+from helpers.parquet_handler import ParquetHandler
 
 
 class DataCleaner:

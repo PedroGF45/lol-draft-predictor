@@ -6,40 +6,33 @@ using genetic algorithm-based hyperparameter optimization and K-fold cross-valid
 Supports classification and regression tasks with sklearn-based models.
 """
 
+import logging
 import os
 import time
-import logging
+from datetime import datetime
+from typing import Any, Dict, Optional, Tuple
+
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime
-from typing import Dict, Optional, Tuple, Any
-
-from sklearn.linear_model import (
-    LogisticRegression,
-    LinearRegression,
-    Ridge,
-    Lasso,
-    SGDClassifier,
-)
+from modeling.deep_learner import DeepLearningClassifier
+from modeling.k_fold_cross_validator import KFoldCrossValidator
+from modeling.model_optimizer import ModelOptimizer
+from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import (
-    RandomForestClassifier,
-    RandomForestRegressor,
     GradientBoostingClassifier,
     GradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
 )
-from sklearn.svm import SVC, SVR
+from sklearn.linear_model import Lasso, LinearRegression, LogisticRegression, Ridge, SGDClassifier
+from sklearn.model_selection import KFold, train_test_split
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.model_selection import KFold, train_test_split
-
-from modeling.model_optimizer import ModelOptimizer
-from modeling.k_fold_cross_validator import KFoldCrossValidator
-from modeling.deep_learner import DeepLearningClassifier
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.svm import SVC, SVR
 
 
 class ModelBuilder:

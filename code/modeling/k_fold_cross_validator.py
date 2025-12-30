@@ -4,25 +4,25 @@ K-Fold Cross Validator for League of Legends Draft Prediction.
 Implements k-fold cross-validation with comprehensive metrics for both classification and regression.
 """
 
-import time
 import logging
-import numpy as np
+import time
 import warnings
-from typing import Dict, Tuple, Optional, Any
+from typing import Any, Dict, Optional, Tuple
 
-from sklearn.model_selection import KFold
+import numpy as np
 from sklearn.metrics import (
     accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
-    confusion_matrix,
     classification_report,
-    mean_squared_error,
+    confusion_matrix,
+    f1_score,
     mean_absolute_error,
+    mean_squared_error,
+    precision_score,
     r2_score,
+    recall_score,
+    roc_auc_score,
 )
+from sklearn.model_selection import KFold
 
 warnings.filterwarnings("ignore")
 
