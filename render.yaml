@@ -12,8 +12,18 @@ services:
         value: /opt/render/project/src/models
       - key: RATE_LIMIT_MAX_REQUESTS
         value: 30
+      - key: MATCH_RATE_LIMIT_MAX_REQUESTS
+        value: 10
+      - key: HF_MODEL_REPO
+        value: PedroGF45/lol-draft-predictor
+      - key: HF_MODEL_REV
+        value: main
       - key: RIOT_API_KEY
         sync: false  # Manual secret
+      - key: API_AUTH_TOKEN
+        sync: false  # Optional API key for public endpoints
+      - key: HF_TOKEN
+        sync: false  # Optional for private HF repos
       - key: REDIS_URL
         fromService:
           type: redis

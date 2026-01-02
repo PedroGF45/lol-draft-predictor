@@ -1,0 +1,112 @@
+name: Model Refresh & Upload
+
+on:
+  workflow_dispatch:  # Manual trigger
+  schedule:
+    - cron: '0 2 * * 0'  # Weekly on Sunday at 2 AM UTC
+
+jobs:
+  refresh-and-upload:
+    name: Train & Upload to HF
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ml-${{ hashFiles('code/webapp_backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-ml-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install huggingface_hub python-dotenv
+          pip install -r code/webapp_backend/requirements.txt
+
+      - name: Cache data artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/cleaned
+            data/raw/master_registry.pkl
+          key: ${{ runner.os }}-data-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-data-
+
+      - name: Create .env file
+        run: |
+          echo "RIOT_API_KEY=${{ secrets.RIOT_API_KEY }}" >> .env
+          echo "RAW_DATA_PATH=./data/raw" >> .env
+          echo "CLEANED_DATA_PATH=./data/cleaned" >> .env
+          echo "FEATURE_ENGINEER_DATA_PATH=./data/feature_engineered" >> .env
+          echo "MODELS_PATH=./models" >> .env
+
+      - name: Check for existing cleaned data
+        id: check_data
+        run: |
+          if [ -d "data/cleaned" ] && [ "$(ls -A data/cleaned)" ]; then
+            echo "has_data=true" >> $GITHUB_OUTPUT
+            echo "✓ Found existing cleaned data"
+          else
+            echo "has_data=false" >> $GITHUB_OUTPUT
+            echo "⚠ No cleaned data found - skipping training"
+          fi
+
+      - name: Train models
+        if: steps.check_data.outputs.has_data == 'true'
+        run: |
+          cd code
+          python train_models.py --models-path ../models
+        continue-on-error: false
+
+      - name: Verify model artifacts
+        id: verify_models
+        run: |
+          if [ -f "models/best_overall.json" ]; then
+            echo "has_models=true" >> $GITHUB_OUTPUT
+            echo "✓ Models trained successfully"
+            cat models/best_overall.json
+          else
+            echo "has_models=false" >> $GITHUB_OUTPUT
+            echo "⚠ No models found - skipping upload"
+          fi
+
+      - name: Upload to Hugging Face
+        if: steps.verify_models.outputs.has_models == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          cd code
+          python upload_to_hf.py \
+            --repo-id PedroGF45/lol-draft-predictor \
+            --models-path ../models \
+            --commit-message "CI: Auto-update models ($(date +'%Y-%m-%d %H:%M UTC'))"
+
+      - name: Trigger Render Deploy
+        if: steps.verify_models.outputs.has_models == 'true'
+        uses: johnbeynon/render-deploy-action@v0.0.8
+        with:
+          service-id: ${{ secrets.RENDER_SERVICE_ID }}
+          api-key: ${{ secrets.RENDER_API_KEY }}
+
+      - name: Wait for deployment
+        if: steps.verify_models.outputs.has_models == 'true'
+        run: sleep 45
+
+      - name: Health check
+        if: steps.verify_models.outputs.has_models == 'true'
+        run: |
+          echo "Testing deployment..."
+          curl -f ${{ secrets.RENDER_SERVICE_URL }}/health
+          echo ""
+          echo "Checking model info..."
+          curl -f ${{ secrets.RENDER_SERVICE_URL }}/model-info | jq '.'

@@ -61,6 +61,13 @@ app.add_middleware(
 _RATE_LIMIT_STORE: Dict[str, List[float]] = defaultdict(list)
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30"))
+_RATE_LIMIT_REDIS_PREFIX = "ratelimit"
+
+# Optional API key for public endpoints (set API_AUTH_TOKEN to enforce)
+_API_KEY = os.getenv("API_AUTH_TOKEN")
+
+# Stricter cap for expensive match predictions
+_MATCH_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("MATCH_RATE_LIMIT_MAX_REQUESTS", "10"))
 
 # Redis client
 _REDIS_CLIENT: Optional[redis.Redis] = None
@@ -119,36 +126,54 @@ _RANDOM_SEED = 42
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """Rate limiting: max requests per IP per window."""
+    """API key gate (optional) + rate limiting using Redis when available."""
     client_ip = request.client.host if request.client else "unknown"
 
-    # Skip rate limiting for health checks
-    if request.url.path == "/health":
+    # Allow public basics
+    if request.url.path in {"/health", "/static/index.html", "/"}:
         return await call_next(request)
 
-    current_time = time.time()
+    # API key enforcement if configured
+    if _API_KEY:
+        provided = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+        if provided != _API_KEY:
+            return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
-    # Clean old requests outside window
-    _RATE_LIMIT_STORE[client_ip] = [
-        timestamp for timestamp in _RATE_LIMIT_STORE[client_ip] if current_time - timestamp < _RATE_LIMIT_WINDOW
-    ]
+    # Pick limit (stricter for match predictions)
+    max_req = _MATCH_RATE_LIMIT_MAX_REQUESTS if request.url.path == "/predict-match" else _RATE_LIMIT_MAX_REQUESTS
+    key_suffix = "match" if request.url.path == "/predict-match" else "default"
 
-    # Check limit
-    if len(_RATE_LIMIT_STORE[client_ip]) >= _RATE_LIMIT_MAX_REQUESTS:
+    # Prefer Redis fixed window
+    redis_key = f"{_RATE_LIMIT_REDIS_PREFIX}:{client_ip}:{key_suffix}"
+    allowed = await _redis_rate_limit(redis_key, max_req, _RATE_LIMIT_WINDOW)
+    if not allowed:
         return JSONResponse(
             status_code=429,
             content={
                 "error": "Rate limit exceeded",
-                "detail": f"Maximum {_RATE_LIMIT_MAX_REQUESTS} requests per {_RATE_LIMIT_WINDOW}s",
+                "detail": f"Maximum {max_req} requests per {_RATE_LIMIT_WINDOW}s",
                 "retry_after": int(_RATE_LIMIT_WINDOW),
             },
         )
 
-    # Add current request
-    _RATE_LIMIT_STORE[client_ip].append(current_time)
+    # In-memory fallback if Redis unavailable
+    if _REDIS_CLIENT is None:
+        current_time = time.time()
+        _RATE_LIMIT_STORE[client_ip] = [
+            ts for ts in _RATE_LIMIT_STORE[client_ip] if current_time - ts < _RATE_LIMIT_WINDOW
+        ]
+        if len(_RATE_LIMIT_STORE[client_ip]) >= max_req:
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Rate limit exceeded",
+                    "detail": f"Maximum {max_req} requests per {_RATE_LIMIT_WINDOW}s",
+                    "retry_after": int(_RATE_LIMIT_WINDOW),
+                },
+            )
+        _RATE_LIMIT_STORE[client_ip].append(current_time)
 
-    response = await call_next(request)
-    return response
+    return await call_next(request)
 
 
 async def get_redis():
@@ -167,6 +192,20 @@ async def get_redis():
                     _LOGGER.warning(f"Redis connection failed: {e}")
                 _REDIS_CLIENT = None
     return _REDIS_CLIENT
+
+
+async def _redis_rate_limit(key: str, limit: int, window: int) -> bool:
+    """Return True if request is allowed; False if over limit."""
+    r = await get_redis()
+    if not r:
+        return True
+    try:
+        count = await r.incr(key)
+        if count == 1:
+            await r.expire(key, window)
+        return count <= limit
+    except Exception:
+        return True
 
 
 async def cache_get(key: str) -> Optional[str]:
@@ -191,7 +230,7 @@ async def cache_set(key: str, value: str, ttl: int = 3600):
 
 
 def get_models_path() -> str:
-    # Prefer env var if set; otherwise use repo-root/models
+    # Prefer env var if set; otherwise use repo-root/models as fallback
     env_path = os.getenv("MODELS_PATH")
     if env_path and os.path.isdir(env_path):
         return env_path
@@ -199,98 +238,146 @@ def get_models_path() -> str:
     return os.path.join(repo_root, "models")
 
 
+def download_from_hf(filename: str, subfolder: Optional[str] = None) -> str:
+    """Download artifact from Hugging Face Hub with caching."""
+    from huggingface_hub import hf_hub_download
+
+    hf_repo = os.getenv("HF_MODEL_REPO", "PedroGF45/lol-draft-predictor")
+    hf_rev = os.getenv("HF_MODEL_REV", "main")
+    hf_token = os.getenv("HF_TOKEN")
+
+    return hf_hub_download(
+        repo_id=hf_repo,
+        filename=filename,
+        subfolder=subfolder,
+        revision=hf_rev,
+        token=hf_token,
+        cache_dir=os.getenv("HF_CACHE_DIR"),
+    )
+
+
+def _normpath(path_str: str) -> str:
+    """Normalize path separators to be OS-agnostic (handles Windows backslashes on Linux)."""
+    return os.path.normpath(path_str.replace("\\", os.sep)) if path_str else path_str
+
+
 def load_best_model(model_bucket: str = "DeepLearningClassifier"):
     global _MODEL, _PREPROCESSOR, _MODEL_NAME, _FEATURE_NAMES, _INPUT_DIM, _RUN_DIR, _TEST_METRICS
 
-    models_path = get_models_path()
-    best_json = os.path.join(models_path, model_bucket, "best.json")
-    if not os.path.exists(best_json):
-        raise FileNotFoundError(f"best.json not found at {best_json}. Train and save a model first.")
+    # Try HF first if configured
+    use_hf = os.getenv("HF_MODEL_REPO") is not None
+    
+    if use_hf:
+        try:
+            if _LOGGER:
+                _LOGGER.info(f"Loading model from Hugging Face: {os.getenv('HF_MODEL_REPO')}")
+            # Download artifacts from HF
+            model_path = download_from_hf("model.pkl")
+            info_path = download_from_hf("info.json")
+            metrics_path = download_from_hf("metrics.json")
+            prep_path = download_from_hf("preprocessor.pkl")
+            
+            _MODEL_NAME = model_bucket
+            _RUN_DIR = os.path.dirname(model_path)
+        except Exception as e:
+            if _LOGGER:
+                _LOGGER.warning(f"HF download failed: {e}. Falling back to local models.")
+            use_hf = False
+    
+    if not use_hf:
+        # Fallback to local models
+        models_path = get_models_path()
+        best_json = os.path.join(models_path, model_bucket, "best.json")
+        if not os.path.exists(best_json):
+            raise FileNotFoundError(f"best.json not found at {best_json}. Train and save a model first.")
 
-    with open(best_json, "r", encoding="utf-8") as f:
-        best = json.load(f)
+        with open(best_json, "r", encoding="utf-8") as f:
+            best = json.load(f)
 
-    run_dir_rel = best.get("run_dir")
-    run_dir = os.path.join(models_path, run_dir_rel) if run_dir_rel else None
-    if not run_dir or not os.path.isdir(run_dir):
-        raise FileNotFoundError("Run directory for best model not found.")
+        run_dir_rel = best.get("run_dir")
+        run_dir = os.path.join(models_path, _normpath(run_dir_rel)) if run_dir_rel else None
+        if not run_dir or not os.path.isdir(run_dir):
+            raise FileNotFoundError("Run directory for best model not found.")
 
-    model_rel = best.get("model_path") or "model.pkl"
-    model_path = (
-        os.path.join(models_path, model_rel) if os.path.isabs(model_rel) else os.path.join(models_path, model_rel)
-    )
-    if not os.path.exists(model_path):
-        # fallback to run_dir/model.pkl
-        model_path = os.path.join(run_dir, "model.pkl")
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model artifact not found at {model_path}.")
+        model_rel = _normpath(best.get("model_path") or "model.pkl")
+        model_path = model_rel if os.path.isabs(model_rel) else os.path.join(models_path, model_rel)
+        if not os.path.exists(model_path):
+            # fallback to run_dir/model.pkl
+            model_path = os.path.join(run_dir, "model.pkl")
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model artifact not found at {model_path}.")
+        
+        info_path = os.path.join(run_dir, "info.json")
+        metrics_path = os.path.join(run_dir, "metrics.json")
+        _MODEL_NAME = model_bucket
+        _RUN_DIR = run_dir
 
     # Load model - try joblib first (for DL models saved via joblib), then torch
     try:
         _MODEL = joblib.load(model_path)
-        # If it's a DeepLearningModel, move to CUDA
         if hasattr(_MODEL, "to") and callable(getattr(_MODEL, "to")):
-            import torch
+            try:
+                import torch
 
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "GPU is required but torch.cuda.is_available() is False. Please install CUDA-enabled PyTorch and ensure a CUDA GPU is available."
-                )
-            _MODEL.to(torch.device("cuda"))
-            if not hasattr(_MODEL, "device"):
-                setattr(_MODEL, "device", torch.device("cuda"))
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                _MODEL.to(device)
+                if not hasattr(_MODEL, "device"):
+                    setattr(_MODEL, "device", device)
+            except Exception:
+                # Torch not available; continue with CPU-only model object
+                pass
     except Exception as joblib_err:
         # If joblib fails, try torch.load (for raw state dicts)
         try:
             import torch
             import torch.nn as nn
 
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "GPU is required but torch.cuda.is_available() is False. Please install CUDA-enabled PyTorch and ensure a CUDA GPU is available."
-                )
-
-            obj = torch.load(model_path, map_location=torch.device("cuda"), weights_only=False)
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            obj = torch.load(model_path, map_location=device, weights_only=False)
             if isinstance(obj, nn.Module):
-                _MODEL = obj.to(torch.device("cuda"))
+                _MODEL = obj.to(device)
                 if not hasattr(_MODEL, "device"):
-                    setattr(_MODEL, "device", torch.device("cuda"))
+                    setattr(_MODEL, "device", device)
             elif isinstance(obj, dict) and DeepLearningClassifier is not None:
                 # Assume binary classification for team1_win
                 num_classes = 2
-                _MODEL = DeepLearningClassifier(input_dim=int(_INPUT_DIM or 0), num_classes=num_classes, require_cuda=True)  # type: ignore
+                _MODEL = DeepLearningClassifier(
+                    input_dim=int(_INPUT_DIM or 0), num_classes=num_classes, require_cuda=False
+                )  # type: ignore
                 _MODEL.load_state_dict(obj)
             else:
                 raise joblib_err
         except Exception:
             raise joblib_err
 
-    # Try load info.json for feature names and input_dim
-    info_path = os.path.join(run_dir, "info.json")
+    # Load info.json for feature names and input_dim
     _FEATURE_NAMES = None
     _INPUT_DIM = None
-    _MODEL_NAME = model_bucket
-    _RUN_DIR = run_dir
     if os.path.exists(info_path):
         with open(info_path, "r", encoding="utf-8") as f:
             info = json.load(f)
         _FEATURE_NAMES = info.get("feature_names")
         _INPUT_DIM = info.get("input_dim")
-        artifacts = info.get("artifacts", {})
-        prep_rel = artifacts.get("preprocessor")
-        if prep_rel:
-            prep_path = os.path.join(models_path, prep_rel) if not os.path.isabs(prep_rel) else prep_rel
-            if os.path.exists(prep_path):
-                _PREPROCESSOR = joblib.load(prep_path)
-        metrics_path_rel = artifacts.get("metrics")
-        if metrics_path_rel:
-            metrics_path = (
-                os.path.join(models_path, metrics_path_rel) if not os.path.isabs(metrics_path_rel) else metrics_path_rel
-            )
-            if os.path.exists(metrics_path):
-                with open(metrics_path, "r", encoding="utf-8") as f:
-                    metrics = json.load(f)
-                _TEST_METRICS = metrics.get("test_metrics", {})
+    
+    # Load preprocessor
+    if 'prep_path' in locals() and prep_path and os.path.exists(prep_path):
+        try:
+            _PREPROCESSOR = joblib.load(prep_path)
+            if _LOGGER:
+                _LOGGER.info("Preprocessor loaded successfully")
+        except Exception as e:
+            if _LOGGER:
+                _LOGGER.warning(f"Failed to load preprocessor: {e}")
+    
+    # Load metrics
+    if 'metrics_path' in locals() and metrics_path and os.path.exists(metrics_path):
+        try:
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                metrics = json.load(f)
+            _TEST_METRICS = metrics.get("test_metrics", {})
+        except Exception as e:
+            if _LOGGER:
+                _LOGGER.warning(f"Failed to load metrics: {e}")
 
     # sanity
     if _INPUT_DIM is None:
@@ -301,7 +388,12 @@ def load_best_model(model_bucket: str = "DeepLearningClassifier"):
 
 
 def load_best_overall_model():
-    """Load the globally best model recorded during training (best_overall.json)."""
+    """Load the globally best model from HF or local best_overall.json."""
+    # If HF configured, use direct downloads (artifacts uploaded are already 'best')
+    if os.getenv("HF_MODEL_REPO"):
+        return load_best_model()
+    
+    # Otherwise fall back to local best_overall.json
     models_path = get_models_path()
     overall_json = os.path.join(models_path, "best_overall.json")
     if not os.path.exists(overall_json):
