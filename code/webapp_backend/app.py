@@ -328,14 +328,14 @@ def _init_data_extraction_services():
 
         # Initialize RegionManager for dynamic region support
         region_manager = RegionManager(api_key=riot_api_key, monitoring_service=monitoring)
-        
+
         # Get default requester for default region (for MatchFetcher)
         default_region = os.getenv("RIOT_DEFAULT_REGION", "euw1")
         _REQUESTER = region_manager.get_requester(default_region)
-        
+
         if not _REQUESTER:
             raise RuntimeError(f"Failed to create requester for default region: {default_region}")
-        
+
         monitoring.info(f"RegionManager initialized with default region: {default_region}")
 
         # Initialize ParquetHandler and MatchFetcher
@@ -752,7 +752,7 @@ async def check_live_game(req: LiveGameRequest):
 
         # Get region-specific requester
         region_requester = region_manager.get_requester(req.region) if region_manager else None
-        
+
         if not region_requester:
             return LiveGameResponse(
                 has_active_game=False,
@@ -761,7 +761,7 @@ async def check_live_game(req: LiveGameRequest):
 
         # Create a temporary MatchFetcher with the region-specific requester
         from helpers.parquet_handler import ParquetHandler
-        
+
         temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
         temp_match_fetcher = MatchFetcher(
             requester=region_requester,
@@ -769,7 +769,7 @@ async def check_live_game(req: LiveGameRequest):
             parquet_handler=temp_parquet_handler,
             dataframe_target_path=os.path.join(REPO_ROOT, "data"),
         )
-        
+
         # Fetch live game with region-specific requester
         match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
             req.game_name, req.tag_line, data_miner=None
