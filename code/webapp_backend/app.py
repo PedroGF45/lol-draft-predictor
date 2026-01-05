@@ -294,7 +294,10 @@ def _init_data_extraction_services():
         )
 
         # Initialize FeatureEngineer
-        _FEATURE_ENGINEER = FeatureEngineer()
+        _FEATURE_ENGINEER = FeatureEngineer(
+            logger=monitoring.logger,
+            parquet_handler=parquet_handler
+        )
 
         monitoring.info("Data extraction services initialized")
     except Exception as e:
