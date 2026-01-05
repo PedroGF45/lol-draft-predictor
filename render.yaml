@@ -9,7 +9,9 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: MODELS_PATH
-        value: /opt/render/project/src/models
+        value: /opt/render/project/models
+      - key: PREPROCESSED_DATA_PATH
+        value: /opt/render/project/data/preprocessed
       - key: RATE_LIMIT_MAX_REQUESTS
         value: 30
       - key: MATCH_RATE_LIMIT_MAX_REQUESTS
@@ -18,6 +20,8 @@ services:
         value: PedroGF45/lol-draft-predictor
       - key: HF_MODEL_REV
         value: main
+      - key: HF_CACHE_DIR
+        value: /opt/render/project/.hf_cache
       - key: RIOT_API_KEY
         sync: false  # Manual secret
       - key: API_AUTH_TOKEN
