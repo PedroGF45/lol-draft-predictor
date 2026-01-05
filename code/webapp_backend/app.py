@@ -279,15 +279,26 @@ def _init_data_extraction_services():
             timeout=10.0
         )
         
-        # Initialize MatchFetcher
-        _MATCH_FETCHER = MatchFetcher(requester=_REQUESTER, logger=monitoring.logger)
+        # Initialize ParquetHandler and MatchFetcher
+        from helpers.parquet_handler import ParquetHandler
+        
+        data_path = os.getenv("DATA_PATH", os.path.join(REPO_ROOT, "data"))
+        parquet_handler = ParquetHandler()
+        
+        _MATCH_FETCHER = MatchFetcher(
+            requester=_REQUESTER,
+            logger=monitoring.logger,
+            parquet_handler=parquet_handler,
+            dataframe_target_path=data_path,
+            master_registry=None  # Optional, not needed for predictions
+        )
         
         # Initialize FeatureEngineer
         _FEATURE_ENGINEER = FeatureEngineer()
         
         monitoring.info("Data extraction services initialized")
     except Exception as e:
-        monitoring.error(f"Failed to initialize data extraction services: {e}")
+        monitoring.warning(f"Failed to initialize data extraction services: {e}")
         _REQUESTER = None
         _MATCH_FETCHER = None
         _FEATURE_ENGINEER = None
