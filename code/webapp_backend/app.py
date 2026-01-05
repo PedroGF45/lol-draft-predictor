@@ -205,6 +205,14 @@ REGION_CLUSTER_MAP = {
     "vn2": "sea",
 }
 
+# Cluster to regions mapping (for fallback)
+CLUSTER_REGIONS_MAP = {
+    "europe": ["euw1", "eun1"],
+    "americas": ["na1", "br1", "la1", "la2"],
+    "asia": ["kr", "jp1"],
+    "sea": ["oc1", "ph2", "sg2", "th2", "tw2", "vn2"],
+}
+
 
 class RegionManager:
     """Manages region-specific requesters with caching."""
@@ -246,6 +254,14 @@ class RegionManager:
         except Exception as e:
             self.monitoring.warning(f"Failed to create requester for region {region}: {e}")
             return None
+
+    def get_cluster_regions(self, region: str) -> List[str]:
+        """Get all regions in the same cluster as the given region."""
+        region = region.lower()
+        cluster = REGION_CLUSTER_MAP.get(region)
+        if not cluster:
+            return [region]
+        return CLUSTER_REGIONS_MAP.get(cluster, [region])
 
 
 # ============================================================================
@@ -750,35 +766,52 @@ async def check_live_game(req: LiveGameRequest):
     try:
         monitoring.info(f"Checking live game for {req.game_name}#{req.tag_line} in region {req.region}")
 
-        # Get region-specific requester
-        region_requester = region_manager.get_requester(req.region) if region_manager else None
-
-        if not region_requester:
+        if not region_manager:
             return LiveGameResponse(
                 has_active_game=False,
-                error=f"Unsupported region: {req.region}. Supported: {', '.join(REGION_CLUSTER_MAP.keys())}",
+                error="Region manager not initialized. Set RIOT_API_KEY.",
             )
 
-        # Create a temporary MatchFetcher with the region-specific requester
-        from helpers.parquet_handler import ParquetHandler
+        # Get all regions in the same cluster to try (player might be on different platform)
+        regions_to_try = region_manager.get_cluster_regions(req.region)
+        monitoring.info(f"Will try platforms in order: {regions_to_try}")
 
-        temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
-        temp_match_fetcher = MatchFetcher(
-            requester=region_requester,
-            logger=monitoring.logger,
-            parquet_handler=temp_parquet_handler,
-            dataframe_target_path=os.path.join(REPO_ROOT, "data"),
-        )
+        match_pre_features = None
+        successful_region = None
 
-        # Fetch live game with region-specific requester
-        match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
-            req.game_name, req.tag_line, data_miner=None
-        )
+        # Try each platform in the cluster until we find the player
+        for try_region in regions_to_try:
+            region_requester = region_manager.get_requester(try_region)
+            if not region_requester:
+                continue
+
+            # Create a temporary MatchFetcher with the region-specific requester
+            from helpers.parquet_handler import ParquetHandler
+
+            temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
+            temp_match_fetcher = MatchFetcher(
+                requester=region_requester,
+                logger=monitoring.logger,
+                parquet_handler=temp_parquet_handler,
+                dataframe_target_path=os.path.join(REPO_ROOT, "data"),
+            )
+
+            # Try to fetch live game
+            monitoring.info(f"Trying platform: {try_region}")
+            match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
+                req.game_name, req.tag_line, data_miner=None
+            )
+
+            if match_pre_features:
+                successful_region = try_region
+                monitoring.info(f"Found player on platform: {try_region}")
+                break
 
         if not match_pre_features:
+            cluster = REGION_CLUSTER_MAP.get(req.region.lower(), "unknown")
             return LiveGameResponse(
                 has_active_game=False,
-                error="No active game found or player not in this region.",
+                error=f"No active game found in {cluster} cluster (tried: {', '.join(regions_to_try)}).",
             )
 
         # Process similar to completed match
