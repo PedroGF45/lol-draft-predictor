@@ -1,16 +1,3 @@
-"""
-Refactored FastAPI application with modular services, enhanced caching,
-batch predictions, and comprehensive logging.
-
-Key improvements:
-- Separated concerns: cache, rate limiting, model loading, monitoring into services
-- Enhanced Redis integration with fallback caching
-- Batch prediction endpoint
-- Lazy model loading
-- Improved error logging and monitoring
-- URL-based prediction sharing support
-"""
-
 import hashlib
 import json
 import os
@@ -694,8 +681,9 @@ async def check_live_game(req: LiveGameRequest):
     try:
         monitoring.info(f"Checking live game for {req.game_name}#{req.tag_line}")
 
+        # DataMiner is optional - MatchFetcher will use requester directly if None
         match_pre_features = _MATCH_FETCHER.fetch_active_game_pre_features(
-            req.game_name, req.tag_line, data_miner=_DATA_MINER
+            req.game_name, req.tag_line, data_miner=None
         )
 
         if not match_pre_features:
