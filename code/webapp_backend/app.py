@@ -55,8 +55,8 @@ from services.rate_limit_service import RateLimitService
 
 # Import data extraction and feature engineering classes (lazy initialized)
 try:
-    from data_extraction.requester import Requester
     from data_extraction.match_fetcher import MatchFetcher
+    from data_extraction.requester import Requester
     from feature_engineering.feature_engineer import FeatureEngineer
 except ImportError as e:
     logging.warning(f"Failed to import data extraction/feature engineering modules: {e}")
@@ -257,45 +257,45 @@ async def logging_middleware(request: Request, call_next):
 def _init_data_extraction_services():
     """Initialize data extraction and feature engineering services lazily."""
     global _REQUESTER, _MATCH_FETCHER, _FEATURE_ENGINEER
-    
+
     if _REQUESTER is not None and _MATCH_FETCHER is not None and _FEATURE_ENGINEER is not None:
         return  # Already initialized
-    
+
     try:
         riot_api_key = os.getenv("RIOT_API_KEY")
         if not riot_api_key:
             monitoring.warning("RIOT_API_KEY not set - live game features will be disabled")
             return
-        
+
         # Initialize Requester
         base_url_v4 = os.getenv("RIOT_BASE_URL_V4", "https://euw1.api.riotgames.com")
         base_url_v5 = os.getenv("RIOT_BASE_URL_V5", "https://europe.api.riotgames.com")
-        
+
         _REQUESTER = Requester(
             logger=monitoring.logger,
             base_url_v4=base_url_v4,
             base_url_v5=base_url_v5,
             headers={"X-Riot-Token": riot_api_key},
-            timeout=10.0
+            timeout=10.0,
         )
-        
+
         # Initialize ParquetHandler and MatchFetcher
         from helpers.parquet_handler import ParquetHandler
-        
+
         data_path = os.getenv("DATA_PATH", os.path.join(REPO_ROOT, "data"))
         parquet_handler = ParquetHandler()
-        
+
         _MATCH_FETCHER = MatchFetcher(
             requester=_REQUESTER,
             logger=monitoring.logger,
             parquet_handler=parquet_handler,
             dataframe_target_path=data_path,
-            master_registry=None  # Optional, not needed for predictions
+            master_registry=None,  # Optional, not needed for predictions
         )
-        
+
         # Initialize FeatureEngineer
         _FEATURE_ENGINEER = FeatureEngineer()
-        
+
         monitoring.info("Data extraction services initialized")
     except Exception as e:
         monitoring.warning(f"Failed to initialize data extraction services: {e}")
