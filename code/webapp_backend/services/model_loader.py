@@ -50,7 +50,7 @@ class ModelLoader:
             logger.info(f"Downloading {filename} from {hf_repo}@{hf_rev}")
             if not hf_token:
                 logger.warning("HF_TOKEN not set - attempting to download public models")
-            
+
             return hf_hub_download(
                 repo_id=hf_repo,
                 filename=filename,
