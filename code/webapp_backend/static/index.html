@@ -5,25 +5,253 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LoL Draft Predictor</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #0b1221; color: #e6edf3; }
-    header { background: #0e1a2b; padding: 16px 24px; border-bottom: 1px solid #18273a; }
-    main { max-width: 900px; margin: 24px auto; padding: 0 16px; }
-    h1 { font-size: 20px; margin: 0; }
-    .card { background: #0e1a2b; border: 1px solid #18273a; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    .row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-    .row .field { display: flex; flex-direction: column; }
-    label { font-size: 12px; color: #9fb7d0; margin-bottom: 4px; }
-    input[type="number"] { background: #0b1221; border: 1px solid #22344d; color: #e6edf3; border-radius: 6px; padding: 8px; }
-    .actions { display: flex; gap: 8px; }
-    button { background: #347d39; border: none; color: white; padding: 10px 14px; border-radius: 6px; cursor: pointer; }
-    button.secondary { background: #134579; }
-    .result { white-space: pre-wrap; background: #0b1221; border: 1px solid #22344d; padding: 12px; border-radius: 6px; }
+    * { box-sizing: border-box; }
+    
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin: 0; 
+      background: linear-gradient(135deg, #0b1221 0%, #0e1a2b 100%);
+      color: #e6edf3;
+      min-height: 100vh;
+    }
+    
+    header { 
+      background: rgba(14, 26, 43, 0.95);
+      padding: 20px 24px;
+      border-bottom: 1px solid #18273a;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+    
+    header h1 { 
+      font-size: 24px;
+      margin: 0;
+      font-weight: 600;
+      background: linear-gradient(135deg, #58a6ff, #79c0ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    main { 
+      max-width: 900px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    
+    h3 { 
+      font-size: 16px;
+      margin: 0 0 12px 0;
+      color: #79c0ff;
+    }
+    
+    .card { 
+      background: rgba(14, 26, 43, 0.8);
+      border: 1px solid #18273a;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s ease;
+    }
+    
+    .card:hover {
+      border-color: #30363d;
+      box-shadow: 0 4px 16px rgba(88, 166, 255, 0.1);
+    }
+    
+    .row { 
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    
+    .field { 
+      display: flex;
+      flex-direction: column;
+    }
+    
+    label { 
+      font-size: 12px;
+      color: #9fb7d0;
+      margin-bottom: 6px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    input[type="text"],
+    input[type="number"],
+    select { 
+      background: rgba(11, 18, 33, 0.8);
+      border: 1px solid #22344d;
+      color: #e6edf3;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 14px;
+      transition: all 0.2s ease;
+      width: 100%;
+    }
+    
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #58a6ff;
+      box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+      background: rgba(11, 18, 33, 0.95);
+    }
+    
+    .actions { 
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+    
+    button { 
+      background: linear-gradient(135deg, #347d39, #2d6a2f);
+      border: none;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 14px;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    button:hover:not(:disabled) {
+      background: linear-gradient(135deg, #3d8f47, #347d39);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(52, 125, 57, 0.3);
+    }
+    
+    button:active:not(:disabled) {
+      transform: translateY(0);
+    }
+    
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    button.secondary { 
+      background: linear-gradient(135deg, #134579, #0d3454);
+    }
+    
+    button.secondary:hover:not(:disabled) {
+      background: linear-gradient(135deg, #1a5a8c, #134579);
+    }
+    
+    /* Loading spinner */
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(88, 166, 255, 0.3);
+      border-top: 2px solid #58a6ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .result { 
+      white-space: pre-wrap;
+      background: rgba(11, 18, 33, 0.9);
+      border: 1px solid #22344d;
+      padding: 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      line-height: 1.6;
+      font-family: 'Courier New', monospace;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    
+    .result.success {
+      border-color: #3fb950;
+      background: rgba(63, 185, 80, 0.05);
+    }
+    
+    .result.error {
+      border-color: #f85149;
+      background: rgba(248, 81, 73, 0.05);
+    }
+    
+    .result.loading {
+      border-color: #58a6ff;
+      background: rgba(88, 166, 255, 0.05);
+    }
+    
     .warn { color: #ffcc66; }
+    .error-text { color: #f85149; }
+    .success-text { color: #3fb950; }
+    .info-text { color: #79c0ff; }
+    
+    /* Model info card */
+    #modelMeta p {
+      margin: 8px 0;
+      font-size: 14px;
+    }
+    
+    /* Responsive design */
+    @media (max-width: 600px) {
+      main {
+        padding: 0 12px;
+        margin: 16px auto;
+      }
+      
+      header h1 {
+        font-size: 20px;
+      }
+      
+      .card {
+        padding: 16px;
+      }
+      
+      .row {
+        grid-template-columns: 1fr;
+      }
+      
+      .actions {
+        flex-direction: column;
+      }
+      
+      button {
+        width: 100%;
+        justify-content: center;
+      }
+    }
+    
+    /* Scrollbar styling */
+    .result::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    .result::-webkit-scrollbar-track {
+      background: rgba(22, 52, 77, 0.5);
+      border-radius: 3px;
+    }
+    
+    .result::-webkit-scrollbar-thumb {
+      background: rgba(88, 166, 255, 0.5);
+      border-radius: 3px;
+    }
+    
+    .result::-webkit-scrollbar-thumb:hover {
+      background: rgba(88, 166, 255, 0.7);
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>LoL Draft Predictor</h1>
+    <h1>⚔️ LoL Draft Predictor</h1>
   </header>
   <main>
     <div class="card" id="modelInfo">
@@ -31,7 +259,7 @@
       <div id="modelMeta" style="display:none">
         <p><strong>Model:</strong> <span id="modelName"></span></p>
         <p><strong>Accuracy:</strong> <span id="modelAccuracy"></span></p>
-        <p><strong>GPU:</strong> <span id="gpuStatus" class="warn"></span></p>
+        <p><strong>Status:</strong> <span id="gpuStatus" class="warn">Ready</span></p>
       </div>
     </div>
 
@@ -40,144 +268,186 @@
       <p>Enter your summoner name and tag to check for an active game and predict the winner.</p>
       <div class="row">
         <div class="field">
-          <label>Summoner Name</label>
-          <input type="text" id="gameName" placeholder="Unefraise" />
+          <label for="gameName">Summoner Name</label>
+          <input type="text" id="gameName" placeholder="Unefraise" autocomplete="off" />
         </div>
         <div class="field">
-          <label>Tag Line</label>
-          <input type="text" id="tagLine" placeholder="KARAP" />
+          <label for="tagLine">Tag Line</label>
+          <input type="text" id="tagLine" placeholder="KARAP" autocomplete="off" />
         </div>
       </div>
       <div class="field" style="margin-top: 12px;">
-        <label>Region</label>
-        <select id="region" style="background: #0b1221; border: 1px solid #22344d; color: #e6edf3; border-radius: 6px; padding: 8px; width: 100%; max-width: 200px;">
-          <option value="euw1">EUW (Europe West)</option>
-          <option value="na1">NA (North America)</option>
-          <option value="kr">KR (Korea)</option>
-          <option value="br1">BR (Brazil)</option>
-          <option value="eun1">EUNE (Europe Nordic & East)</option>
-          <option value="jp1">JP (Japan)</option>
-          <option value="la1">LAN (Latin America North)</option>
-          <option value="la2">LAS (Latin America South)</option>
-          <option value="oc1">OCE (Oceania)</option>
-          <option value="tr1">TR (Turkey)</option>
-          <option value="ru">RU (Russia)</option>
-          <option value="ph2">PH (Philippines)</option>
-          <option value="sg2">SG (Singapore)</option>
-          <option value="th2">TH (Thailand)</option>
-          <option value="tw2">TW (Taiwan)</option>
-          <option value="vn2">VN (Vietnam)</option>
+        <label for="region">Region</label>
+        <select id="region">
+          <option value="euw1">🇪🇺 EUW (Europe West)</option>
+          <option value="eun1">🇪🇺 EUNE (Europe Nordic & East)</option>
+          <option value="na1">🇺🇸 NA (North America)</option>
+          <option value="br1">🇧🇷 BR (Brazil)</option>
+          <option value="la1">🇲🇽 LAN (Latin America North)</option>
+          <option value="la2">🇦🇷 LAS (Latin America South)</option>
+          <option value="kr">🇰🇷 KR (Korea)</option>
+          <option value="jp1">🇯🇵 JP (Japan)</option>
+          <option value="ph2">🇵🇭 PH (Philippines)</option>
+          <option value="sg2">🇸🇬 SG (Singapore)</option>
+          <option value="th2">🇹🇭 TH (Thailand)</option>
+          <option value="tw2">🇹🇼 TW (Taiwan)</option>
+          <option value="vn2">🇻🇳 VN (Vietnam)</option>
+          <option value="oc1">🇦🇺 OCE (Oceania)</option>
+          <option value="tr1">🇹🇷 TR (Turkey)</option>
+          <option value="ru">🇷🇺 RU (Russia)</option>
         </select>
       </div>
-      <div class="actions" style="margin-top:12px">
-        <button id="predictBtn">Check Live Game & Predict</button>
+      <div class="actions">
+        <button id="predictBtn">
+          <span id="btnIcon">🔍</span>
+          <span id="btnText">Check Live Game & Predict</span>
+        </button>
         <button class="secondary" id="clearBtn">Clear</button>
       </div>
     </div>
 
     <div class="card">
       <h3>Prediction Result</h3>
-      <div class="result" id="resultBox">No result yet.</div>
+      <div class="result" id="resultBox">No result yet. Enter a summoner name to get started.</div>
     </div>
   </main>
 
   <script>
+    const resultBox = document.getElementById('resultBox');
+    const gameName = document.getElementById('gameName');
+    const tagLine = document.getElementById('tagLine');
+    const region = document.getElementById('region');
+    const predictBtn = document.getElementById('predictBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const btnIcon = document.getElementById('btnIcon');
+    const btnText = document.getElementById('btnText');
+
     async function fetchModelInfo() {
-      const r = await fetch('/model-info');
-      if (!r.ok) {
-        document.getElementById('modelStatus').textContent = 'Model not loaded yet. Train and save a best model.';
-        return;
-      }
-      const info = await r.json();
-      document.getElementById('modelStatus').style.display = 'none';
-      document.getElementById('modelMeta').style.display = 'block';
-      document.getElementById('modelName').textContent = info.model_name;
-      document.getElementById('modelAccuracy').textContent = (info.metrics.accuracy * 100).toFixed(2) + '%';
       try {
-        const gpuR = await fetch('/health');
-        document.getElementById('gpuStatus').textContent = 'Backend enforces GPU for DL models';
+        const r = await fetch('/model-info');
+        if (!r.ok) {
+          document.getElementById('modelStatus').textContent = 'Model not loaded yet. Train and save a best model.';
+          return;
+        }
+        const info = await r.json();
+        document.getElementById('modelStatus').style.display = 'none';
+        document.getElementById('modelMeta').style.display = 'block';
+        document.getElementById('modelName').textContent = info.model_name;
+        document.getElementById('modelAccuracy').textContent = (info.metrics.accuracy * 100).toFixed(2) + '%';
       } catch (e) {
-        document.getElementById('gpuStatus').textContent = 'Unknown';
+        document.getElementById('modelStatus').textContent = 'Failed to load model info';
       }
     }
 
     async function predict() {
-      const gameName = document.getElementById('gameName').value.trim();
-      const tagLine = document.getElementById('tagLine').value.trim();
-      const region = document.getElementById('region').value;
+      const name = gameName.value.trim();
+      const tag = tagLine.value.trim();
       
-      if (!gameName || !tagLine) {
-        document.getElementById('resultBox').textContent = 'Please enter both summoner name and tag line.';
+      if (!name || !tag) {
+        resultBox.className = 'result error';
+        resultBox.textContent = '❌ Error: Please enter both summoner name and tag line.';
         return;
       }
 
-      document.getElementById('resultBox').textContent = 'Checking for live game... (this may take 10-30 seconds)';
+      // Disable button and show loading state
+      predictBtn.disabled = true;
+      btnIcon.className = 'spinner';
+      btnText.textContent = 'Checking for active game...';
+      resultBox.className = 'result loading';
+      resultBox.textContent = '⏳ Checking for active game... (this may take 10-30 seconds)';
       
       try {
         const r = await fetch('/check-live-game', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            game_name: gameName, 
-            tag_line: tagLine,
-            region: region
+            game_name: name, 
+            tag_line: tag,
+            region: region.value
           })
         });
         
         if (!r.ok) {
+          resultBox.className = 'result error';
           const errText = await r.text();
-          document.getElementById('resultBox').textContent = `Error: ${errText}`;
+          resultBox.textContent = `❌ Error: ${errText}`;
+          predictBtn.disabled = false;
+          btnIcon.textContent = '🔍';
+          btnText.textContent = 'Check Live Game & Predict';
           return;
         }
         
         const result = await r.json();
         
         if (!result.has_active_game) {
-          document.getElementById('resultBox').innerHTML = `
-<strong style="color: #f85149">❌ No Active Game Found</strong>
+          resultBox.className = 'result error';
+          resultBox.innerHTML = `
+❌ <span class="error-text">No Active Game Found</span>
 
 ${result.error || 'This summoner is not currently in a live game.'}
 
-<span style="color: #9fb7d0">Note: We cannot predict completed games. Please enter the game during champion select or while the game is in progress.</span>
+<span class="info-text">💡 Tip: We only predict active games during champion select or while the game is in progress. Completed games cannot be predicted.</span>
           `.trim();
+          predictBtn.disabled = false;
+          btnIcon.textContent = '🔍';
+          btnText.textContent = 'Check Live Game & Predict';
           return;
         }
         
-        const redPct = (result.team_red_win_probability * 100).toFixed(2);
-        const bluePct = (result.team_blue_win_probability * 100).toFixed(2);
+        const redPct = (result.team_red_win_probability * 100).toFixed(1);
+        const bluePct = (result.team_blue_win_probability * 100).toFixed(1);
         const winner = result.predicted_winner.toUpperCase();
+        const winnerIcon = winner === 'RED' ? '🔴' : '🔵';
         
-        document.getElementById('resultBox').innerHTML = `
-<strong>✅ Live Game Detected!</strong>
+        resultBox.className = 'result success';
+        resultBox.innerHTML = `
+✅ <span class="success-text">Live Game Detected!</span>
+
 <strong>Game ID:</strong> ${result.game_id}
 
-<strong style="color: #f85149">🔴 Team Red Win Probability:</strong> ${redPct}%
-<strong style="color: #3fb950">🔵 Team Blue Win Probability:</strong> ${bluePct}%
+<strong class="error-text">🔴 Team Red Win Probability:</strong> <strong>${redPct}%</strong>
+<strong class="success-text">🔵 Team Blue Win Probability:</strong> <strong>${bluePct}%</strong>
 
-<strong>Predicted Winner:</strong> <span style="color: ${winner === 'RED' ? '#f85149' : '#3fb950'}">${winner}</span>
+<strong>Predicted Winner:</strong> <span style="color: ${winner === 'RED' ? '#f85149' : '#3fb950'}; font-size: 18px;">${winnerIcon} ${winner}</span>
         `.trim();
       } catch (e) {
-        document.getElementById('resultBox').textContent = `Request failed: ${e.message}`;
+        resultBox.className = 'result error';
+        resultBox.textContent = `❌ Request failed: ${e.message}`;
+      } finally {
+        predictBtn.disabled = false;
+        btnIcon.textContent = '🔍';
+        btnText.textContent = 'Check Live Game & Predict';
       }
     }
 
     function clearForm() {
-      document.getElementById('gameName').value = '';
-      document.getElementById('tagLine').value = '';
-      document.getElementById('region').value = 'euw1';
-      document.getElementById('resultBox').textContent = 'No result yet.';
+      gameName.value = '';
+      tagLine.value = '';
+      region.value = 'euw1';
+      resultBox.className = 'result';
+      resultBox.textContent = 'No result yet. Enter a summoner name to get started.';
+      gameName.focus();
     }
 
-    document.getElementById('predictBtn').addEventListener('click', predict);
-    document.getElementById('clearBtn').addEventListener('click', clearForm);
-    document.getElementById('gameName').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') predict();
+    // Event listeners
+    predictBtn.addEventListener('click', predict);
+    clearBtn.addEventListener('click', clearForm);
+    
+    // Allow Enter key to predict
+    gameName.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && !tagLine.value.trim()) {
+        tagLine.focus();
+      } else if (e.key === 'Enter') {
+        predict();
+      }
     });
-    document.getElementById('tagLine').addEventListener('keypress', (e) => {
+    
+    tagLine.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') predict();
     });
 
-    fetchModelInfo();
+    // Load model info on page load
+    window.addEventListener('load', fetchModelInfo);
   </script>
 </body>
 </html>
