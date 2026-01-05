@@ -82,6 +82,7 @@ class PredictRequest(BaseModel):
 
     features: Optional[List[float]] = None
     feature_map: Optional[Dict[str, float]] = None
+    model_config = {"protected_namespaces": ()}
 
 
 class PredictResponse(BaseModel):
@@ -118,7 +119,7 @@ class ModelInfoResponse(BaseModel):
 
     model_name: str
     run_dir: str
-    metrics: Dict[str, float]
+    metrics: Dict[str, Dict]  # Contains cv_metrics and test_metrics dicts
     feature_names: Optional[List[str]]
     input_dim: int
     model_config = {"protected_namespaces": ()}
@@ -128,6 +129,7 @@ class MatchPredictRequest(BaseModel):
     """Match prediction request."""
 
     match_id: str
+    model_config = {"protected_namespaces": ()}
 
 
 class MatchPredictResponse(BaseModel):
@@ -139,6 +141,7 @@ class MatchPredictResponse(BaseModel):
     predicted_winner: str
     confidence: float  # Max of the two probabilities
     share_url: Optional[str] = None  # URL to share prediction
+    model_config = {"protected_namespaces": ()}
 
 
 class LiveGameRequest(BaseModel):
@@ -147,6 +150,7 @@ class LiveGameRequest(BaseModel):
     game_name: str
     tag_line: str
     region: str = "euw1"
+    model_config = {"protected_namespaces": ()}
 
 
 class LiveGameResponse(BaseModel):
@@ -160,6 +164,7 @@ class LiveGameResponse(BaseModel):
     confidence: Optional[float] = None
     share_url: Optional[str] = None
     error: Optional[str] = None
+    model_config = {"protected_namespaces": ()}
 
 
 class MetricsResponse(BaseModel):
@@ -173,6 +178,7 @@ class MetricsResponse(BaseModel):
     model_predictions: int
     batch_predictions: int
     timestamp: str
+    model_config = {"protected_namespaces": ()}
 
 
 # ============================================================================
