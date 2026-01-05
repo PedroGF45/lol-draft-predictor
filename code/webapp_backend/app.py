@@ -53,6 +53,17 @@ from services.model_loader import ModelLoader
 from services.monitoring_service import MonitoringService
 from services.rate_limit_service import RateLimitService
 
+# Import data extraction and feature engineering classes (lazy initialized)
+try:
+    from data_extraction.requester import Requester
+    from data_extraction.match_fetcher import MatchFetcher
+    from feature_engineering.feature_engineer import FeatureEngineer
+except ImportError as e:
+    logging.warning(f"Failed to import data extraction/feature engineering modules: {e}")
+    Requester = None  # type: ignore
+    MatchFetcher = None  # type: ignore
+    FeatureEngineer = None  # type: ignore
+
 # ============================================================================
 # FastAPI App Setup
 # ============================================================================
@@ -191,6 +202,11 @@ cache_service = CacheService()
 rate_limit_service = RateLimitService()
 model_loader = ModelLoader()
 
+# Global instances for data extraction and feature engineering (lazy initialized)
+_REQUESTER: Optional[Requester] = None
+_MATCH_FETCHER: Optional[MatchFetcher] = None
+_FEATURE_ENGINEER: Optional[FeatureEngineer] = None
+
 # ============================================================================
 # Middleware
 # ============================================================================
@@ -234,6 +250,50 @@ async def logging_middleware(request: Request, call_next):
 
 
 # ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def _init_data_extraction_services():
+    """Initialize data extraction and feature engineering services lazily."""
+    global _REQUESTER, _MATCH_FETCHER, _FEATURE_ENGINEER
+    
+    if _REQUESTER is not None and _MATCH_FETCHER is not None and _FEATURE_ENGINEER is not None:
+        return  # Already initialized
+    
+    try:
+        riot_api_key = os.getenv("RIOT_API_KEY")
+        if not riot_api_key:
+            monitoring.warning("RIOT_API_KEY not set - live game features will be disabled")
+            return
+        
+        # Initialize Requester
+        base_url_v4 = os.getenv("RIOT_BASE_URL_V4", "https://euw1.api.riotgames.com")
+        base_url_v5 = os.getenv("RIOT_BASE_URL_V5", "https://europe.api.riotgames.com")
+        
+        _REQUESTER = Requester(
+            logger=monitoring.logger,
+            base_url_v4=base_url_v4,
+            base_url_v5=base_url_v5,
+            headers={"X-Riot-Token": riot_api_key},
+            timeout=10.0
+        )
+        
+        # Initialize MatchFetcher
+        _MATCH_FETCHER = MatchFetcher(requester=_REQUESTER, logger=monitoring.logger)
+        
+        # Initialize FeatureEngineer
+        _FEATURE_ENGINEER = FeatureEngineer()
+        
+        monitoring.info("Data extraction services initialized")
+    except Exception as e:
+        monitoring.error(f"Failed to initialize data extraction services: {e}")
+        _REQUESTER = None
+        _MATCH_FETCHER = None
+        _FEATURE_ENGINEER = None
+
+
+# ============================================================================
 # Event Handlers
 # ============================================================================
 
@@ -259,6 +319,9 @@ async def startup_event():
         monitoring.info(f"Model loaded: {model_loader.model_name}")
     except Exception as e:
         monitoring.warning(f"Model load deferred: {e}")
+
+    # Initialize data extraction services (lazy - only if API key is available)
+    _init_data_extraction_services()
 
     # Mount static files
     static_dir = os.path.join(os.path.dirname(__file__), "static")

@@ -506,7 +506,11 @@
         document.getElementById('modelStatus').style.display = 'none';
         document.getElementById('modelMeta').style.display = 'block';
         document.getElementById('modelName').textContent = info.model_name;
-        document.getElementById('modelAccuracy').textContent = (info.metrics.accuracy * 100).toFixed(2) + '%';
+        // Handle nested metrics structure (test_metrics.accuracy or fallback)
+        const accuracy = info.metrics?.test_metrics?.accuracy || info.metrics?.accuracy;
+        document.getElementById('modelAccuracy').textContent = accuracy 
+          ? (accuracy * 100).toFixed(2) + '%' 
+          : 'N/A';
       } catch (e) {
         document.getElementById('modelStatus').textContent = 'Failed to load model info';
       }
