@@ -45,18 +45,22 @@ class ModelLoader:
             hf_repo = os.getenv("HF_MODEL_REPO", "PedroGF45/lol-draft-predictor")
             hf_rev = os.getenv("HF_MODEL_REV", "main")
             hf_token = os.getenv("HF_TOKEN")
+            hf_cache = os.getenv("HF_CACHE_DIR")
 
-            logger.info(f"Downloading {filename} from {hf_repo}")
+            logger.info(f"Downloading {filename} from {hf_repo}@{hf_rev}")
+            if not hf_token:
+                logger.warning("HF_TOKEN not set - attempting to download public models")
+            
             return hf_hub_download(
                 repo_id=hf_repo,
                 filename=filename,
                 subfolder=subfolder,
                 revision=hf_rev,
                 token=hf_token,
-                cache_dir=os.getenv("HF_CACHE_DIR"),
+                cache_dir=hf_cache,
             )
         except Exception as e:
-            logger.error(f"HuggingFace download failed: {e}")
+            logger.error(f"HuggingFace download failed: {e}. Make sure HF_TOKEN is set for private repos")
             raise
 
     async def load_best_model(self, model_bucket: str = "DeepLearningClassifier"):
@@ -91,23 +95,50 @@ class ModelLoader:
         self.model_name = model_bucket
         self.run_dir = os.path.dirname(model_path)
 
-        # Load model
-        with open(model_path, "rb") as f:
-            self.model = pickle.load(f)
+        # Load model - try pickle first, fallback to joblib
+        try:
+            with open(model_path, "rb") as f:
+                self.model = pickle.load(f)
+        except (pickle.UnpicklingError, EOFError, ValueError) as e:
+            logger.warning(f"Pickle load failed, trying joblib: {e}")
+            try:
+                self.model = joblib.load(model_path)
+            except Exception as e2:
+                logger.error(f"Both pickle and joblib failed for {model_path}: {e2}")
+                raise RuntimeError(f"Failed to load model file: {e2}") from e2
 
-        # Load preprocessor
-        with open(prep_path, "rb") as f:
-            self.preprocessor = pickle.load(f)
+        # Load preprocessor - try pickle first, fallback to joblib
+        try:
+            with open(prep_path, "rb") as f:
+                self.preprocessor = pickle.load(f)
+        except (pickle.UnpicklingError, EOFError, ValueError, FileNotFoundError) as e:
+            logger.warning(f"Preprocessor pickle load failed: {e}")
+            try:
+                if os.path.exists(prep_path):
+                    self.preprocessor = joblib.load(prep_path)
+                else:
+                    logger.warning("Preprocessor file not found, continuing without it")
+                    self.preprocessor = None
+            except Exception as e2:
+                logger.warning(f"Preprocessor loading skipped: {e2}")
+                self.preprocessor = None
 
         # Load metadata
-        with open(info_path) as f:
-            info = json.load(f)
-            self.feature_names = info.get("feature_names")
-            self.input_dim = info.get("input_dim")
+        try:
+            with open(info_path) as f:
+                info = json.load(f)
+                self.feature_names = info.get("feature_names")
+                self.input_dim = info.get("input_dim")
+        except Exception as e:
+            logger.warning(f"Could not load info.json: {e}")
 
         # Load metrics
-        with open(metrics_path) as f:
-            self.test_metrics = json.load(f)
+        try:
+            with open(metrics_path) as f:
+                self.test_metrics = json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load metrics.json: {e}")
+            self.test_metrics = {}
 
     async def _load_from_local(self, model_bucket: str):
         """Load model from local filesystem."""
@@ -122,24 +153,51 @@ class ModelLoader:
         metrics_path = os.path.join(model_dir, "metrics.json")
         prep_path = os.path.join(model_dir, "preprocessor.pkl")
 
-        # Load model
-        self.model = joblib.load(model_path)
+        # Load model - try joblib first, then pickle
+        try:
+            self.model = joblib.load(model_path)
+        except Exception as e:
+            logger.warning(f"Joblib load failed, trying pickle: {e}")
+            try:
+                with open(model_path, "rb") as f:
+                    self.model = pickle.load(f)
+            except Exception as e2:
+                raise RuntimeError(f"Failed to load model from {model_path}: {e2}") from e2
+
         self.model_name = model_bucket
         self.run_dir = model_dir
 
         # Load preprocessor if exists
         if os.path.exists(prep_path):
-            self.preprocessor = joblib.load(prep_path)
+            try:
+                self.preprocessor = joblib.load(prep_path)
+            except Exception as e:
+                logger.warning(f"Could not load preprocessor with joblib: {e}")
+                try:
+                    with open(prep_path, "rb") as f:
+                        self.preprocessor = pickle.load(f)
+                except Exception as e2:
+                    logger.warning(f"Preprocessor load skipped: {e2}")
+                    self.preprocessor = None
 
         # Load metadata
-        with open(info_path) as f:
-            info = json.load(f)
-            self.feature_names = info.get("feature_names")
-            self.input_dim = info.get("input_dim")
+        if os.path.exists(info_path):
+            try:
+                with open(info_path) as f:
+                    info = json.load(f)
+                    self.feature_names = info.get("feature_names")
+                    self.input_dim = info.get("input_dim")
+            except Exception as e:
+                logger.warning(f"Could not load info.json: {e}")
 
         # Load metrics
-        with open(metrics_path) as f:
-            self.test_metrics = json.load(f)
+        if os.path.exists(metrics_path):
+            try:
+                with open(metrics_path) as f:
+                    self.test_metrics = json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not load metrics.json: {e}")
+                self.test_metrics = {}
 
     def predict(self, features: np.ndarray) -> Tuple[int, np.ndarray]:
         """Make prediction using loaded model."""
