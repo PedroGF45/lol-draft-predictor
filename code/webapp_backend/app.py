@@ -36,6 +36,7 @@ except Exception:
 import logging
 
 import pandas as pd
+from data_extraction.data_miner import DataMiner
 from data_extraction.match_fetcher import MatchFetcher
 
 # Import pipeline components for match processing
@@ -106,6 +107,21 @@ class MatchPredictResponse(BaseModel):
     predicted_winner: str  # "red" or "blue"
 
 
+class LiveGameRequest(BaseModel):
+    game_name: str
+    tag_line: str
+    region: str = "euw1"  # default region
+
+
+class LiveGameResponse(BaseModel):
+    has_active_game: bool
+    game_id: Optional[str] = None
+    team_red_win_probability: Optional[float] = None
+    team_blue_win_probability: Optional[float] = None
+    predicted_winner: Optional[str] = None
+    error: Optional[str] = None
+
+
 # Global cached model and metadata
 _MODEL = None
 _PREPROCESSOR = None
@@ -118,6 +134,7 @@ _TEST_METRICS: Dict[str, float] = {}
 # Global pipeline components
 _REQUESTER = None
 _MATCH_FETCHER = None
+_DATA_MINER = None
 _PARQUET_HANDLER = None
 _FEATURE_ENGINEER = None
 _LOGGER = None
@@ -474,6 +491,21 @@ def startup_event():
             _FEATURE_ENGINEER = FeatureEngineer(
                 logger=_LOGGER, parquet_handler=_PARQUET_HANDLER, random_state=_RANDOM_SEED
             )
+            
+            # Initialize DataMiner for account lookups (for live game detection)
+            try:
+                _DATA_MINER = DataMiner(
+                    logger=_LOGGER,
+                    requester=_REQUESTER,
+                    parquet_handler=_PARQUET_HANDLER,
+                    raw_data_path=os.path.join(REPO_ROOT, "data", "raw"),
+                    patient_zero_game_name="placeholder",  # Not used for live game checks
+                    patient_zero_tag_line="placeholder",
+                )
+                _LOGGER.info("DataMiner initialized for live game checks")
+            except Exception as e:
+                _LOGGER.warning(f"DataMiner initialization failed (live game checks may not work): {e}")
+            
             _LOGGER.info("Pipeline components initialized")
     except Exception as e:
         _LOGGER.error(f"Failed to initialize pipeline: {e}")
@@ -836,3 +868,186 @@ async def predict_match(req: MatchPredictRequest):
     except Exception as e:
         _LOGGER.error(f"Prediction failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+
+@app.post("/check-live-game", response_model=LiveGameResponse)
+async def check_live_game(req: LiveGameRequest):
+    """Check if user has active game and predict outcome if available."""
+    if not _REQUESTER or not _MATCH_FETCHER or not _FEATURE_ENGINEER:
+        raise HTTPException(status_code=500, detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.")
+
+    if _MODEL is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
+
+    try:
+        # Fetch active game pre-features using DataMiner for account lookups
+        _LOGGER.info(f"Checking live game for {req.game_name}#{req.tag_line} in {req.region}")
+        match_pre_features = _MATCH_FETCHER.fetch_active_game_pre_features(req.game_name, req.tag_line, data_miner=_DATA_MINER)
+        
+        if not match_pre_features:
+            return LiveGameResponse(
+                has_active_game=False,
+                error="No active game found. Cannot predict completed games."
+            )
+        
+        # Process live game similar to completed match
+        participants = match_pre_features.get("team1_participants") + match_pre_features.get("team2_participants")
+        _LOGGER.info(f"Live game found with {len(participants)} participants")
+        
+        # Fetch player data (summoner level, mastery, rank, KPIs)
+        summoner_levels = _MATCH_FETCHER.fetch_summoner_level_data(participants=participants)
+        
+        champion_picks = match_pre_features.get("team1_picks") + match_pre_features.get("team2_picks")
+        champion_masteries = _MATCH_FETCHER.fetch_champion_mastery_data(
+            participants=participants, champion_picks=champion_picks
+        )
+        
+        champion_total_mastery_scores = _MATCH_FETCHER.fetch_total_mastery_score(participants=participants)
+        rank_queue_data = _MATCH_FETCHER.fetch_rank_queue_data(participants=participants)
+        
+        # For live games, fetch recent KPIs (not historical before game)
+        kpi_limit = int(os.getenv("PREDICT_KPI_LIMIT", "10"))
+        kpis_data = _MATCH_FETCHER.fetch_raw_player_kpis(
+            participants=participants,
+            match_limit_per_player=kpi_limit,
+            before_timestamp=None,  # Use recent games, not historical
+        )
+        
+        # Create match record
+        match_id = match_pre_features.get("match_id")
+        match_record = _MATCH_FETCHER.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
+        
+        # Create player history records
+        player_history_records = []
+        for puuid in participants:
+            team_id = 100 if puuid in match_pre_features.get("team1_participants") else 200
+            role = (
+                match_pre_features.get("team1_roles")[match_pre_features.get("team1_participants").index(puuid)]
+                if team_id == 100
+                else match_pre_features.get("team2_roles")[match_pre_features.get("team2_participants").index(puuid)]
+            )
+            champion_id = (
+                match_pre_features.get("team1_picks")[match_pre_features.get("team1_participants").index(puuid)]
+                if team_id == 100
+                else match_pre_features.get("team2_picks")[match_pre_features.get("team2_participants").index(puuid)]
+            )
+            player_history_record = _MATCH_FETCHER.create_player_history_record(
+                match_id=match_id,
+                puuid=puuid,
+                team_id=team_id,
+                role=role,
+                champion_id=champion_id,
+                summoner_level=summoner_levels.get(puuid),
+                champion_mastery=champion_masteries.get(puuid),
+                champion_total_mastery_score=champion_total_mastery_scores.get(puuid),
+                rank_queue_data=rank_queue_data,
+                kpis_data=kpis_data.get(puuid),
+            )
+            player_history_records.append(player_history_record)
+        
+        # Create DataFrames and process
+        match_df = pd.DataFrame([match_record])
+        player_history_df = pd.DataFrame(player_history_records)
+        
+        # Create temporary DataHandler
+        temp_handler = DataHandler(
+            logger=_LOGGER,
+            parquet_handler=_PARQUET_HANDLER,
+            target_feature="team1_win",
+            random_state=_RANDOM_SEED,
+            master_registry=None,
+        )
+        
+        # Join match and player data
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            match_tmp = os.path.join(tmpdir, "match.parquet")
+            player_tmp = os.path.join(tmpdir, "player.parquet")
+            _PARQUET_HANDLER.write_parquet(match_df, match_tmp)
+            _PARQUET_HANDLER.write_parquet(player_history_df, player_tmp)
+            temp_handler.join_match_and_player_data(match_parquet_path=match_tmp, player_parquet_path=player_tmp)
+        
+        combined_df = temp_handler.get_combined_dataframe()
+        
+        # Generate features
+        try:
+            X = _FEATURE_ENGINEER.generate_new_features(combined_df.copy())
+        except Exception:
+            X = combined_df.copy()
+        
+        # Drop non-feature columns
+        drop_cols = [col for col in ["team1_win", "match_id", "game_version"] if col in X.columns]
+        if drop_cols:
+            X = X.drop(columns=drop_cols)
+        
+        # Apply preprocessor
+        if _PREPROCESSOR is not None:
+            try:
+                X_pre = _PREPROCESSOR.transform(X if isinstance(X, pd.DataFrame) else pd.DataFrame(X))
+            except Exception as e:
+                _LOGGER.error(f"Preprocessor transform failed: {e}")
+                X_pre = X
+        else:
+            X_pre = X
+        
+        # Align features if needed
+        if _FEATURE_NAMES:
+            if isinstance(X_pre, pd.DataFrame):
+                X_pre = X_pre.reindex(columns=_FEATURE_NAMES, fill_value=0.0)
+                x = X_pre.values.astype(np.float32)
+            else:
+                x = X_pre
+        else:
+            x = X_pre.values if isinstance(X_pre, pd.DataFrame) else X_pre
+        
+        # Predict
+        if hasattr(_MODEL, "forward"):
+            import torch
+            _MODEL.eval()
+            with torch.no_grad():
+                inp = torch.FloatTensor(x).to(getattr(_MODEL, "device", "cpu"))
+                logits = _MODEL.forward(inp)
+                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+        elif hasattr(_MODEL, "predict_proba"):
+            probs = _MODEL.predict_proba(x)[0]
+        else:
+            pred = _MODEL.predict(x)
+            probs = np.array([1.0 - pred[0], pred[0]]) if pred[0] in [0, 1] else np.array([0.5, 0.5])
+        
+        # Get probabilities
+        idx_blue = 1
+        idx_red = 0
+        try:
+            if hasattr(_MODEL, "classes_"):
+                classes = list(getattr(_MODEL, "classes_", []))
+                if True in classes:
+                    idx_blue = classes.index(True)
+                elif 1 in classes:
+                    idx_blue = classes.index(1)
+                if False in classes:
+                    idx_red = classes.index(False)
+                elif 0 in classes:
+                    idx_red = classes.index(0)
+        except Exception:
+            pass
+        
+        team_blue_prob = float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
+        team_red_prob = float(probs[idx_red]) if idx_red < len(probs) else 0.5
+        predicted_winner = "red" if team_red_prob > team_blue_prob else "blue"
+        
+        return LiveGameResponse(
+            has_active_game=True,
+            game_id=match_id,
+            team_red_win_probability=team_red_prob,
+            team_blue_win_probability=team_blue_prob,
+            predicted_winner=predicted_winner,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        _LOGGER.error(f"Live game check failed: {e}", exc_info=True)
+        return LiveGameResponse(
+            has_active_game=False,
+            error=f"Failed to check live game: {str(e)}"
+        )

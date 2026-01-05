@@ -36,15 +36,41 @@
     </div>
 
     <div class="card">
-      <h3>Predict Match Outcome</h3>
-      <p>Enter a League of Legends match ID to predict the winner.</p>
-      <div class="field">
-        <label>Match ID</label>
-        <input type="text" id="matchId" placeholder="EUW1_1234567890" style="width: 100%; max-width: 400px;" />
-        <p style="font-size: 11px; color: #9fb7d0; margin-top: 4px;">Example: EUW1_7115169830</p>
+      <h3>Predict Live Game Outcome</h3>
+      <p>Enter your summoner name and tag to check for an active game and predict the winner.</p>
+      <div class="row">
+        <div class="field">
+          <label>Summoner Name</label>
+          <input type="text" id="gameName" placeholder="Unefraise" />
+        </div>
+        <div class="field">
+          <label>Tag Line</label>
+          <input type="text" id="tagLine" placeholder="KARAP" />
+        </div>
+      </div>
+      <div class="field" style="margin-top: 12px;">
+        <label>Region</label>
+        <select id="region" style="background: #0b1221; border: 1px solid #22344d; color: #e6edf3; border-radius: 6px; padding: 8px; width: 100%; max-width: 200px;">
+          <option value="euw1">EUW (Europe West)</option>
+          <option value="na1">NA (North America)</option>
+          <option value="kr">KR (Korea)</option>
+          <option value="br1">BR (Brazil)</option>
+          <option value="eun1">EUNE (Europe Nordic & East)</option>
+          <option value="jp1">JP (Japan)</option>
+          <option value="la1">LAN (Latin America North)</option>
+          <option value="la2">LAS (Latin America South)</option>
+          <option value="oc1">OCE (Oceania)</option>
+          <option value="tr1">TR (Turkey)</option>
+          <option value="ru">RU (Russia)</option>
+          <option value="ph2">PH (Philippines)</option>
+          <option value="sg2">SG (Singapore)</option>
+          <option value="th2">TH (Thailand)</option>
+          <option value="tw2">TW (Taiwan)</option>
+          <option value="vn2">VN (Vietnam)</option>
+        </select>
       </div>
       <div class="actions" style="margin-top:12px">
-        <button id="predictBtn">Predict Winner</button>
+        <button id="predictBtn">Check Live Game & Predict</button>
         <button class="secondary" id="clearBtn">Clear</button>
       </div>
     </div>
@@ -76,19 +102,26 @@
     }
 
     async function predict() {
-      const matchId = document.getElementById('matchId').value.trim();
-      if (!matchId) {
-        document.getElementById('resultBox').textContent = 'Please enter a match ID.';
+      const gameName = document.getElementById('gameName').value.trim();
+      const tagLine = document.getElementById('tagLine').value.trim();
+      const region = document.getElementById('region').value;
+      
+      if (!gameName || !tagLine) {
+        document.getElementById('resultBox').textContent = 'Please enter both summoner name and tag line.';
         return;
       }
 
-      document.getElementById('resultBox').textContent = 'Predicting... (fetching match, cleaning, feature engineering)';
+      document.getElementById('resultBox').textContent = 'Checking for live game... (this may take 10-30 seconds)';
       
       try {
-        const r = await fetch('/predict-match', {
+        const r = await fetch('/check-live-game', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ match_id: matchId })
+          body: JSON.stringify({ 
+            game_name: gameName, 
+            tag_line: tagLine,
+            region: region
+          })
         });
         
         if (!r.ok) {
@@ -98,12 +131,25 @@
         }
         
         const result = await r.json();
+        
+        if (!result.has_active_game) {
+          document.getElementById('resultBox').innerHTML = `
+<strong style="color: #f85149">❌ No Active Game Found</strong>
+
+${result.error || 'This summoner is not currently in a live game.'}
+
+<span style="color: #9fb7d0">Note: We cannot predict completed games. Please enter the game during champion select or while the game is in progress.</span>
+          `.trim();
+          return;
+        }
+        
         const redPct = (result.team_red_win_probability * 100).toFixed(2);
         const bluePct = (result.team_blue_win_probability * 100).toFixed(2);
         const winner = result.predicted_winner.toUpperCase();
         
         document.getElementById('resultBox').innerHTML = `
-<strong>Match ID:</strong> ${result.match_id}
+<strong>✅ Live Game Detected!</strong>
+<strong>Game ID:</strong> ${result.game_id}
 
 <strong style="color: #f85149">🔴 Team Red Win Probability:</strong> ${redPct}%
 <strong style="color: #3fb950">🔵 Team Blue Win Probability:</strong> ${bluePct}%
@@ -116,13 +162,18 @@
     }
 
     function clearForm() {
-      document.getElementById('matchId').value = '';
+      document.getElementById('gameName').value = '';
+      document.getElementById('tagLine').value = '';
+      document.getElementById('region').value = 'euw1';
       document.getElementById('resultBox').textContent = 'No result yet.';
     }
 
     document.getElementById('predictBtn').addEventListener('click', predict);
     document.getElementById('clearBtn').addEventListener('click', clearForm);
-    document.getElementById('matchId').addEventListener('keypress', (e) => {
+    document.getElementById('gameName').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') predict();
+    });
+    document.getElementById('tagLine').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') predict();
     });
 

@@ -104,6 +104,47 @@ class DataMiner:
                 f"Invalid patient zero: '{self.patient_zero_game_name}#{self.patient_zero_tag_line}' not found or inaccessible"
             )
 
+    def get_account_by_riot_id(self, game_name: str, tag_line: str) -> Optional[dict]:
+        """
+        Get account info (including PUUID) by Riot ID (gameName#tagLine).
+
+        Args:
+            game_name: Summoner name (e.g., "Unefraise")
+            tag_line: Tag line (e.g., "KARAP")
+
+        Returns:
+            Account data with puuid, gameName, tagLine or None if not found
+        """
+        endpoint = f"/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
+        return self.requester.make_request(is_v5=True, endpoint_url=endpoint)
+
+    def get_summoner_by_puuid(self, puuid: str) -> Optional[dict]:
+        """
+        Get summoner info (including encrypted summoner ID) by PUUID.
+
+        Args:
+            puuid: Player PUUID
+
+        Returns:
+            Summoner data with id (encrypted summoner ID), accountId, puuid, name, etc.
+        """
+        endpoint = f"/lol/summoner/v4/summoners/by-puuid/{puuid}"
+        return self.requester.make_request(is_v5=False, endpoint_url=endpoint)
+
+    def get_active_game(self, encrypted_summoner_id: str) -> Optional[dict]:
+        """
+        Get active/live game information for a summoner.
+
+        Args:
+            encrypted_summoner_id: Encrypted summoner ID from summoner endpoint
+
+        Returns:
+            Active game data with gameId, participants, bannedChampions, etc.
+            Returns None if no active game (404) or on error
+        """
+        endpoint = f"/lol/spectator/v4/active-games/by-summoner/{encrypted_summoner_id}"
+        return self.requester.make_request(is_v5=False, endpoint_url=endpoint)
+
     def _is_patient_zero_valid(self) -> bool:
         """
         Validate that the patient zero summoner exists in the API and add them to discovery queue.
@@ -114,14 +155,11 @@ class DataMiner:
         Returns:
             bool: True if patient zero summoner found and added to queue, False otherwise.
         """
-        endpoint_url = (
-            f"/riot/account/v1/accounts/by-riot-id/{self.patient_zero_game_name}/{self.patient_zero_tag_line}"
-        )
-        response = self.requester.make_request(is_v5=True, endpoint_url=endpoint_url)
+        account = self.get_account_by_riot_id(self.patient_zero_game_name, self.patient_zero_tag_line)
 
-        if response and response.get("puuid"):
-            self.players_queue.append(response["puuid"])
-            self.seen_players.add(response["puuid"])
+        if account and account.get("puuid"):
+            self.players_queue.append(account["puuid"])
+            self.seen_players.add(account["puuid"])
             return True
         return False
 
