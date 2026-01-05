@@ -5,9 +5,12 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 try:
-    from huggingface_hub import HfApi, create_repo, snapshot_download
+    from huggingface_hub import HfApi, create_repo, snapshot_download, delete_repo
 except ImportError as e:  # pragma: no cover - dependency handled by workflows
-    raise ImportError("huggingface_hub is required for dataset syncing. Install with `pip install huggingface_hub`.\nOriginal error: " + str(e))
+    raise ImportError(
+        "huggingface_hub is required for dataset syncing. Install with `pip install huggingface_hub`.\nOriginal error: "
+        + str(e)
+    )
 
 
 DEFAULT_DATASET_REPO_ID = "PedroGF45/lol-draft-predictor-data"
@@ -17,10 +20,10 @@ def _normalize_repo_path(path: Path) -> str:
     """
     Normalize a path for use in Hugging Face repos.
     Always uses forward slashes, regardless of OS.
-    
+
     Args:
         path: Path object to normalize
-    
+
     Returns:
         String path with forward slashes
     """
@@ -45,14 +48,14 @@ def download_dataset_repo(
     """
     Download the HF dataset repo into a local directory.
     Cross-platform compatible path handling.
-    
+
     Args:
         local_dir: Local directory to download to
         repo_id: HF dataset repo ID
         token: HF authentication token
         allow_patterns: Optional patterns to filter downloads
         logger: Optional logger instance
-    
+
     Returns:
         String path to downloaded directory
     """
@@ -62,7 +65,7 @@ def download_dataset_repo(
 
     local_path = Path(local_dir).resolve()
     local_path.mkdir(parents=True, exist_ok=True)
-    
+
     log.info(f"Downloading dataset repo '{repo_id}' into {local_path}")
     log.info(f"Platform: {sys.platform}")
 
@@ -79,13 +82,42 @@ def download_dataset_repo(
     except Exception as e:
         log.error(f"Failed to download dataset: {e}")
         raise
-    
+
     return str(local_path)
 
 
 def _ensure_repo(repo_id: str, token: Optional[str]) -> None:
     api = HfApi()
     create_repo(repo_id, token=token, repo_type="dataset", exist_ok=True)
+
+
+def clear_and_recreate_repo(
+    repo_id: Optional[str] = None,
+    token: Optional[str] = None,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """
+    Delete and recreate the dataset repo (clears all existing data).
+
+    Args:
+        repo_id: HF dataset repo ID
+        token: HF authentication token
+        logger: Optional logger instance
+    """
+    log = logger or logging.getLogger(__name__)
+    repo_id = _get_repo_id(repo_id)
+    token = _get_token(token)
+
+    log.warning(f"Deleting entire repo: {repo_id}")
+    try:
+        delete_repo(repo_id, token=token, repo_type="dataset")
+        log.info("Repo deleted")
+    except Exception as e:
+        log.warning(f"Could not delete repo (might not exist): {e}")
+
+    log.info(f"Creating fresh repo: {repo_id}")
+    create_repo(repo_id, token=token, repo_type="dataset", exist_ok=True)
+    log.info("Fresh repo created")
 
 
 def upload_folder(
@@ -99,7 +131,7 @@ def upload_folder(
     """
     Upload a directory to the dataset repo, preserving structure.
     Uses forward slashes for repo paths on all platforms.
-    
+
     Args:
         folder_path: Local folder path to upload
         path_in_repo: Target path in repo (uses forward slashes)
@@ -110,11 +142,11 @@ def upload_folder(
     """
     log = logger or logging.getLogger(__name__)
     folder = Path(folder_path).resolve()
-    
+
     if not folder.exists():
         log.warning(f"Skip upload: folder does not exist: {folder}")
         return
-    
+
     if not folder.is_dir():
         log.warning(f"Skip upload: not a directory: {folder}")
         return
@@ -155,7 +187,7 @@ def upload_file(
     """
     Upload a single file to the dataset repo.
     Uses forward slashes for repo paths on all platforms.
-    
+
     Args:
         file_path: Local file path to upload
         path_in_repo: Target path in repo (uses forward slashes)
@@ -166,11 +198,11 @@ def upload_file(
     """
     log = logger or logging.getLogger(__name__)
     fp = Path(file_path).resolve()
-    
+
     if not fp.exists():
         log.warning(f"Skip upload: file does not exist: {fp}")
         return
-    
+
     if not fp.is_file():
         log.warning(f"Skip upload: not a file: {fp}")
         return
@@ -212,7 +244,7 @@ def upload_paths(
     """
     Upload multiple paths, preserving relative layout from local_root.
     Cross-platform compatible - handles Windows, Linux, and macOS paths.
-    
+
     Args:
         paths: Iterable of local paths to upload
         local_root: Local root directory (used for computing relative paths)
@@ -229,13 +261,13 @@ def upload_paths(
 
     local_root_path = Path(local_root).resolve()
     repo_root_path = Path(repo_root) if repo_root else Path("")
-    
+
     log.info(f"Uploading from local root: {local_root_path}")
     log.info(f"Uploading to repo root: {_normalize_repo_path(repo_root_path) or '(root)'}")
-    
+
     upload_count = 0
     error_count = 0
-    
+
     for raw in paths:
         path = Path(raw).resolve()
         if not path.exists():
@@ -275,5 +307,5 @@ def upload_paths(
         except Exception as e:
             log.error(f"Error uploading {path}: {e}")
             error_count += 1
-    
+
     log.info(f"Upload summary: {upload_count} succeeded, {error_count} failed")

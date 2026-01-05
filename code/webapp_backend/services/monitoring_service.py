@@ -39,9 +39,7 @@ class MonitoringService:
         # Console handler
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-        console_formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
+        console_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         console_handler.setFormatter(console_formatter)
         self.logger.addHandler(console_handler)
 
@@ -52,9 +50,7 @@ class MonitoringService:
                 log_file, maxBytes=10 * 1024 * 1024, backupCount=5  # 10MB per file
             )
             file_handler.setLevel(level)
-            json_formatter = jsonlogger.JsonFormatter(
-                "%(timestamp)s %(level)s %(name)s %(message)s"
-            )
+            json_formatter = jsonlogger.JsonFormatter("%(timestamp)s %(level)s %(name)s %(message)s")
             file_handler.setFormatter(json_formatter)
             self.logger.addHandler(file_handler)
 
@@ -140,9 +136,7 @@ class MonitoringService:
         """Get current metrics."""
         uptime_seconds = time.time() - self.start_time
         cache_total = self.metrics["cache_hits"] + self.metrics["cache_misses"]
-        cache_hit_rate = (
-            self.metrics["cache_hits"] / cache_total if cache_total > 0 else 0
-        )
+        cache_hit_rate = self.metrics["cache_hits"] / cache_total if cache_total > 0 else 0
 
         return {
             "uptime_seconds": uptime_seconds,

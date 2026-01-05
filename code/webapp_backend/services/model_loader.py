@@ -34,9 +34,7 @@ class ModelLoader:
         env_path = os.getenv("MODELS_PATH")
         if env_path and os.path.isdir(env_path):
             return env_path
-        repo_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..")
-        )
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         return os.path.join(repo_root, "models")
 
     def _download_from_hf(self, filename: str, subfolder: Optional[str] = None) -> str:

@@ -38,30 +38,30 @@ def train_models(
 ):
     """
     Train models using existing preprocessed data.
-    
+
     Args:
         cleaned_timestamp: Timestamp of cleaned data to load (e.g., "20251222_114237")
         feature_eng_timestamp: Timestamp of feature engineered data to load
         models_path: Output path for trained models
     """
     RANDOM_SEED = 42
-    
+
     # Load environment
     load_dotenv()
-    
+
     # Get paths from env or defaults
     CLEANED_DATA_PATH = os.getenv("CLEANED_DATA_PATH", "./data/cleaned")
     FEATURE_ENGINEER_DATA_PATH = os.getenv("FEATURE_ENGINEER_DATA_PATH", "./data/feature_engineered")
     MODELS_PATH = models_path or os.getenv("MODELS_PATH", "./models")
     RAW_DATA_PATH = os.getenv("RAW_DATA_PATH", "./data/raw")
-    
+
     logger.info("=" * 60)
     logger.info("MODEL TRAINING PIPELINE")
     logger.info("=" * 60)
-    
+
     # Initialize components
     parquet_handler = ParquetHandler(logger=logger, random_state=RANDOM_SEED)
-    
+
     # Try to use registry if available
     registry_path = os.path.join(RAW_DATA_PATH, "master_registry.pkl")
     master_registry = None
@@ -71,7 +71,7 @@ def train_models(
             logger.info("Master registry loaded")
         except Exception as e:
             logger.warning(f"Could not load registry: {e}")
-    
+
     # Create data handler
     data_handler = DataHandler(
         logger=logger,
@@ -80,10 +80,10 @@ def train_models(
         random_state=RANDOM_SEED,
         master_registry=master_registry,
     )
-    
+
     # Load existing splits
     logger.info(f"Loading cleaned data from {CLEANED_DATA_PATH}...")
-    
+
     if cleaned_timestamp:
         # Load specific timestamp
         data_handler.load_splits(input_dir=CLEANED_DATA_PATH, timestamp=cleaned_timestamp)
@@ -96,12 +96,12 @@ def train_models(
             data_handler.load_splits(input_dir=CLEANED_DATA_PATH, timestamp=latest)
         else:
             raise FileNotFoundError(f"No cleaned data found in {CLEANED_DATA_PATH}. Run full pipeline first.")
-    
+
     # Feature engineering
     logger.info("Performing feature engineering...")
     feature_engineer = FeatureEngineer(logger=logger, parquet_handler=parquet_handler, random_state=RANDOM_SEED)
     feature_engineer.perform_feature_engineering(data_handler=data_handler, output_dir=FEATURE_ENGINEER_DATA_PATH)
-    
+
     # Dimension reduction
     logger.info("Performing dimension reduction (PCA)...")
     dimension_reducer = DimensionReducer(logger=logger, parquet_handler=parquet_handler)
@@ -110,7 +110,7 @@ def train_models(
         pca_plot_dir=None,  # Skip plots in CI
         output_dir=FEATURE_ENGINEER_DATA_PATH,
     )
-    
+
     # Build models
     logger.info("Building models...")
     model_builder = ModelBuilder(
@@ -123,7 +123,7 @@ def train_models(
         logger=logger,
         auto_preprocess=False,
     )
-    
+
     # Attach preprocessing artifacts
     try:
         numeric_features = getattr(dimension_reducer, "pca_input_features", list(data_handler.get_data_train().columns))
@@ -139,16 +139,16 @@ def train_models(
         logger.info("Attached preprocessing artifacts")
     except Exception as e:
         logger.warning(f"Failed to attach preprocessing artifacts: {e}")
-    
+
     # Train
     model_builder.build_models()
-    
+
     logger.info("=" * 60)
     logger.info("TRAINING COMPLETE!")
     logger.info(f"Models saved to: {MODELS_PATH}")
     logger.info(f"Best model: {model_builder.best_model_name}")
     logger.info("=" * 60)
-    
+
     return MODELS_PATH
 
 
@@ -168,7 +168,7 @@ def main():
         help="Output path for trained models",
     )
     args = parser.parse_args()
-    
+
     try:
         models_path = train_models(
             cleaned_timestamp=args.cleaned_timestamp,

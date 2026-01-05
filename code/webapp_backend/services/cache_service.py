@@ -30,9 +30,7 @@ class CacheService:
             return False
 
         try:
-            self.redis_client = await redis.from_url(
-                redis_url, encoding="utf-8", decode_responses=True
-            )
+            self.redis_client = await redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
             await self.redis_client.ping()
             self.is_connected = True
             logger.info("Redis connected successfully")

@@ -32,9 +32,7 @@ class RateLimitService:
             return False
 
         try:
-            self.redis_client = await redis.from_url(
-                redis_url, encoding="utf-8", decode_responses=True
-            )
+            self.redis_client = await redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
             await self.redis_client.ping()
             logger.info("Rate limit service connected to Redis")
             return True
@@ -78,9 +76,7 @@ class RateLimitService:
 
         # Clean old entries
         if key in self.memory_store:
-            self.memory_store[key] = [
-                ts for ts in self.memory_store[key] if current_time - ts < self.window
-            ]
+            self.memory_store[key] = [ts for ts in self.memory_store[key] if current_time - ts < self.window]
         else:
             self.memory_store[key] = []
 

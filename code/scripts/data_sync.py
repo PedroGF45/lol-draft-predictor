@@ -5,22 +5,23 @@ Single script to handle all data syncing operations.
 Usage:
     # Upload all data
     python code/scripts/data_sync.py push
-    
+
     # Download all data
     python code/scripts/data_sync.py pull
-    
+
     # Upload only registry files
     python code/scripts/data_sync.py push --mode registry
-    
+
     # Upload latest processed data
     python code/scripts/data_sync.py push --mode latest
-    
+
     # Preview what would be uploaded
     python code/scripts/data_sync.py push --dry-run
-    
+
     # Upload specific paths
     python code/scripts/data_sync.py push --paths data/cleaned data/registry_export.csv
 """
+
 import argparse
 import logging
 import os
@@ -31,7 +32,7 @@ from typing import List
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers.hf_data_repo import download_dataset_repo, upload_paths
+from helpers.hf_data_repo import download_dataset_repo, upload_paths, clear_and_recreate_repo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("data_sync")
@@ -66,7 +67,7 @@ def get_latest_paths(local_dir: Path) -> List[Path]:
     """Get latest processed data paths."""
     base = Path(local_dir).resolve()
     paths = []
-    
+
     # Latest cleaned
     cleaned_dir = base / "cleaned"
     if cleaned_dir.exists():
@@ -74,7 +75,7 @@ def get_latest_paths(local_dir: Path) -> List[Path]:
         if timestamped:
             paths.append(timestamped[0])
             logger.info(f"Latest cleaned: {timestamped[0].name}")
-    
+
     # Latest feature_engineered
     fe_dir = base / "feature_engineered"
     if fe_dir.exists():
@@ -82,7 +83,7 @@ def get_latest_paths(local_dir: Path) -> List[Path]:
         if timestamped:
             paths.append(timestamped[0])
             logger.info(f"Latest feature_engineered: {timestamped[0].name}")
-    
+
     # Add registry
     paths.extend(get_registry_paths(local_dir))
     return paths
@@ -111,51 +112,29 @@ Examples:
   
   # Upload specific paths
   python code/scripts/data_sync.py push --paths data/cleaned data/registry_export.csv
-        """
+        """,
     )
-    parser.add_argument(
-        "action",
-        choices=["pull", "push"],
-        help="pull=download from HF, push=upload to HF"
-    )
+    parser.add_argument("action", choices=["pull", "push"], help="pull=download from HF, push=upload to HF")
     parser.add_argument(
         "--mode",
         choices=["all", "registry", "latest"],
         default="all",
-        help="What to sync: all data (default), registry only, or latest processed"
+        help="What to sync: all data (default), registry only, or latest processed",
     )
+    parser.add_argument("--local-dir", default="data", help="Local directory for dataset (default: data)")
+    parser.add_argument("--paths", nargs="*", help="Specific paths to push (overrides --mode)")
+    parser.add_argument("--repo-id", help="HF dataset repo ID (default: env HF_DATASET_REPO_ID)")
+    parser.add_argument("--token", help="HF token (default: env HF_TOKEN)")
+    parser.add_argument("--commit-message", help="Commit message for push")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be uploaded without uploading")
     parser.add_argument(
-        "--local-dir",
-        default="data",
-        help="Local directory for dataset (default: data)"
-    )
-    parser.add_argument(
-        "--paths",
-        nargs="*",
-        help="Specific paths to push (overrides --mode)"
-    )
-    parser.add_argument(
-        "--repo-id",
-        help="HF dataset repo ID (default: env HF_DATASET_REPO_ID)"
-    )
-    parser.add_argument(
-        "--token",
-        help="HF token (default: env HF_TOKEN)"
-    )
-    parser.add_argument(
-        "--commit-message",
-        help="Commit message for push"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be uploaded without uploading"
+        "--replace", action="store_true", help="Delete everything in repo first, then upload (fresh start)"
     )
     args = parser.parse_args()
 
     # Normalize path
     local_dir = Path(args.local_dir).resolve()
-    
+
     if not local_dir.exists():
         logger.error(f"Local directory does not exist: {local_dir}")
         sys.exit(1)
@@ -163,12 +142,7 @@ Examples:
     # PULL ACTION
     if args.action == "pull":
         logger.info(f"📥 Downloading dataset to: {local_dir}")
-        download_dataset_repo(
-            local_dir=str(local_dir),
-            repo_id=args.repo_id,
-            token=args.token,
-            logger=logger
-        )
+        download_dataset_repo(local_dir=str(local_dir), repo_id=args.repo_id, token=args.token, logger=logger)
         logger.info("✅ Download complete!")
         return
 
@@ -190,39 +164,53 @@ Examples:
     # Filter existing paths
     existing = [p for p in paths if p.exists()]
     missing = [p for p in paths if not p.exists()]
-    
+
     if missing:
         logger.warning("⚠️  Missing paths (will skip):")
         for p in missing:
             logger.warning(f"  - {p}")
-    
+
     if not existing:
         logger.warning("❌ No paths to upload")
         return
-    
+
     # Show what will be uploaded
     logger.info(f"📤 Uploading {len(existing)} path(s):")
     total_size = 0
     for p in existing:
         if p.is_dir():
-            file_count = sum(1 for _ in p.rglob('*') if _.is_file())
+            file_count = sum(1 for _ in p.rglob("*") if _.is_file())
             logger.info(f"  📁 {p.name} ({file_count} files)")
         else:
             size_mb = p.stat().st_size / 1024 / 1024
             total_size += size_mb
             logger.info(f"  📄 {p.name} ({size_mb:.2f} MB)")
-    
+
     if args.dry_run:
         logger.info("🔍 DRY RUN - No files uploaded")
         return
 
     # Check for HF token
-    if not args.token and not os.getenv('HF_TOKEN'):
+    if not args.token and not os.getenv("HF_TOKEN"):
         logger.error("❌ HF_TOKEN not set. Set it with:")
         logger.error("   Windows: $env:HF_TOKEN='your_token'")
         logger.error("   Linux/Mac: export HF_TOKEN='your_token'")
         logger.error("   Or use: --token your_token")
         sys.exit(1)
+
+    # Replace mode - delete and recreate repo
+    if args.replace:
+        logger.warning("⚠️  REPLACE MODE: This will delete everything in the repo first!")
+        response = input("Are you sure? Type 'yes' to continue: ")
+        if response.lower() != "yes":
+            logger.info("Cancelled")
+            return
+
+        clear_and_recreate_repo(
+            repo_id=args.repo_id,
+            token=args.token,
+            logger=logger,
+        )
 
     # Upload
     upload_paths(
@@ -234,7 +222,7 @@ Examples:
         commit_message=args.commit_message or f"Sync data ({args.mode} mode)",
         logger=logger,
     )
-    
+
     logger.info("✅ Upload complete!")
 
 

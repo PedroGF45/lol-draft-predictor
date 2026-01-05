@@ -1,5 +1,5 @@
 """
-Refactored FastAPI application with modular services, enhanced caching, 
+Refactored FastAPI application with modular services, enhanced caching,
 batch predictions, and comprehensive logging.
 
 Key improvements:
@@ -218,14 +218,10 @@ async def logging_middleware(request: Request, call_next):
     endpoint_key = (
         "match"
         if request.url.path == "/predict-match"
-        else "batch"
-        if request.url.path == "/batch-predict"
-        else "default"
+        else "batch" if request.url.path == "/batch-predict" else "default"
     )
     if not await rate_limit_service.is_allowed(client_ip, endpoint_key):
-        monitoring.log_request(
-            request.url.path, request.method, client_ip, 429, 0, "Rate limit exceeded"
-        )
+        monitoring.log_request(request.url.path, request.method, client_ip, 429, 0, "Rate limit exceeded")
         return JSONResponse(
             status_code=429,
             content={
@@ -240,9 +236,7 @@ async def logging_middleware(request: Request, call_next):
     # Log request
     duration_ms = (time.time() - start_time) * 1000
     error = None if response.status_code < 400 else f"HTTP {response.status_code}"
-    monitoring.log_request(
-        request.url.path, request.method, client_ip, response.status_code, duration_ms, error
-    )
+    monitoring.log_request(request.url.path, request.method, client_ip, response.status_code, duration_ms, error)
 
     return response
 
@@ -515,11 +509,7 @@ async def batch_predict(req: BatchPredictRequest):
 @app.post("/predict-match", response_model=MatchPredictResponse)
 async def predict_match(req: MatchPredictRequest):
     """Predict match outcome from match ID."""
-    if (
-        not _REQUESTER
-        or not _MATCH_FETCHER
-        or not _FEATURE_ENGINEER
-    ):
+    if not _REQUESTER or not _MATCH_FETCHER or not _FEATURE_ENGINEER:
         raise HTTPException(
             status_code=503,
             detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.",
@@ -571,9 +561,7 @@ async def predict_match(req: MatchPredictRequest):
             player_tmp = os.path.join(tmpdir, "player.parquet")
             _PARQUET_HANDLER.write_parquet(match_df, match_tmp)
             _PARQUET_HANDLER.write_parquet(player_history_df, player_tmp)
-            temp_handler.join_match_and_player_data(
-                match_parquet_path=match_tmp, player_parquet_path=player_tmp
-            )
+            temp_handler.join_match_and_player_data(match_parquet_path=match_tmp, player_parquet_path=player_tmp)
 
         combined_df = temp_handler.get_combined_dataframe()
 
@@ -584,20 +572,14 @@ async def predict_match(req: MatchPredictRequest):
             X = combined_df.copy()
 
         # Drop non-feature columns
-        drop_cols = [
-            col
-            for col in ["team1_win", "match_id", "game_version"]
-            if col in X.columns
-        ]
+        drop_cols = [col for col in ["team1_win", "match_id", "game_version"] if col in X.columns]
         if drop_cols:
             X = X.drop(columns=drop_cols)
 
         # Apply preprocessing
         if model_loader.preprocessor is not None:
             try:
-                X_pre = model_loader.preprocessor.transform(
-                    X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-                )
+                X_pre = model_loader.preprocessor.transform(X if isinstance(X, pd.DataFrame) else pd.DataFrame(X))
             except Exception as e:
                 monitoring.warning(f"Preprocessing failed: {e}")
                 X_pre = X
@@ -607,9 +589,7 @@ async def predict_match(req: MatchPredictRequest):
         # Align features
         if model_loader.feature_names:
             if isinstance(X_pre, pd.DataFrame):
-                X_pre = X_pre.reindex(
-                    columns=model_loader.feature_names, fill_value=0.0
-                )
+                X_pre = X_pre.reindex(columns=model_loader.feature_names, fill_value=0.0)
                 x = X_pre.values.astype(np.float32)
             else:
                 x = X_pre
@@ -633,9 +613,7 @@ async def predict_match(req: MatchPredictRequest):
             elif 0 in classes:
                 idx_red = classes.index(0)
 
-        team_blue_prob = (
-            float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
-        )
+        team_blue_prob = float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
         team_red_prob = float(probs[idx_red]) if idx_red < len(probs) else 0.5
 
         predicted_winner = "red" if team_red_prob > team_blue_prob else "blue"
@@ -686,11 +664,7 @@ async def predict_match(req: MatchPredictRequest):
 @app.post("/check-live-game", response_model=LiveGameResponse)
 async def check_live_game(req: LiveGameRequest):
     """Check for active game and predict outcome."""
-    if (
-        not _REQUESTER
-        or not _MATCH_FETCHER
-        or not _FEATURE_ENGINEER
-    ):
+    if not _REQUESTER or not _MATCH_FETCHER or not _FEATURE_ENGINEER:
         raise HTTPException(
             status_code=503,
             detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.",
@@ -715,30 +689,20 @@ async def check_live_game(req: LiveGameRequest):
             )
 
         # Process similar to completed match
-        participants = (
-            match_pre_features.get("team1_participants", [])
-            + match_pre_features.get("team2_participants", [])
+        participants = match_pre_features.get("team1_participants", []) + match_pre_features.get(
+            "team2_participants", []
         )
 
         monitoring.info(f"Live game found with {len(participants)} participants")
 
         # Fetch player data
-        summoner_levels = _MATCH_FETCHER.fetch_summoner_level_data(
-            participants=participants
-        )
-        champion_picks = (
-            match_pre_features.get("team1_picks", [])
-            + match_pre_features.get("team2_picks", [])
-        )
+        summoner_levels = _MATCH_FETCHER.fetch_summoner_level_data(participants=participants)
+        champion_picks = match_pre_features.get("team1_picks", []) + match_pre_features.get("team2_picks", [])
         champion_masteries = _MATCH_FETCHER.fetch_champion_mastery_data(
             participants=participants, champion_picks=champion_picks
         )
-        champion_total_mastery_scores = _MATCH_FETCHER.fetch_total_mastery_score(
-            participants=participants
-        )
-        rank_queue_data = _MATCH_FETCHER.fetch_rank_queue_data(
-            participants=participants
-        )
+        champion_total_mastery_scores = _MATCH_FETCHER.fetch_total_mastery_score(participants=participants)
+        rank_queue_data = _MATCH_FETCHER.fetch_rank_queue_data(participants=participants)
 
         kpi_limit = int(os.getenv("PREDICT_KPI_LIMIT", "10"))
         kpis_data = _MATCH_FETCHER.fetch_raw_player_kpis(
@@ -749,9 +713,7 @@ async def check_live_game(req: LiveGameRequest):
 
         # Create match and player records
         match_id = match_pre_features.get("match_id")
-        match_record = _MATCH_FETCHER.create_match_record(
-            match_id=match_id, match_pre_features=match_pre_features
-        )
+        match_record = _MATCH_FETCHER.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
 
         player_history_records = []
         for i, puuid in enumerate(participants):
@@ -777,9 +739,7 @@ async def check_live_game(req: LiveGameRequest):
                 champion_id=champion_id,
                 summoner_level=summoner_levels.get(puuid),
                 champion_mastery=champion_masteries.get(puuid),
-                champion_total_mastery_score=champion_total_mastery_scores.get(
-                    puuid
-                ),
+                champion_total_mastery_score=champion_total_mastery_scores.get(puuid),
                 rank_queue_data=rank_queue_data,
                 kpis_data=kpis_data.get(puuid),
             )
@@ -804,9 +764,7 @@ async def check_live_game(req: LiveGameRequest):
             player_tmp = os.path.join(tmpdir, "player.parquet")
             _PARQUET_HANDLER.write_parquet(match_df, match_tmp)
             _PARQUET_HANDLER.write_parquet(player_history_df, player_tmp)
-            temp_handler.join_match_and_player_data(
-                match_parquet_path=match_tmp, player_parquet_path=player_tmp
-            )
+            temp_handler.join_match_and_player_data(match_parquet_path=match_tmp, player_parquet_path=player_tmp)
 
         combined_df = temp_handler.get_combined_dataframe()
 
@@ -815,19 +773,13 @@ async def check_live_game(req: LiveGameRequest):
         except Exception:
             X = combined_df.copy()
 
-        drop_cols = [
-            col
-            for col in ["team1_win", "match_id", "game_version"]
-            if col in X.columns
-        ]
+        drop_cols = [col for col in ["team1_win", "match_id", "game_version"] if col in X.columns]
         if drop_cols:
             X = X.drop(columns=drop_cols)
 
         if model_loader.preprocessor is not None:
             try:
-                X_pre = model_loader.preprocessor.transform(
-                    X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-                )
+                X_pre = model_loader.preprocessor.transform(X if isinstance(X, pd.DataFrame) else pd.DataFrame(X))
             except Exception:
                 X_pre = X
         else:
@@ -835,9 +787,7 @@ async def check_live_game(req: LiveGameRequest):
 
         if model_loader.feature_names:
             if isinstance(X_pre, pd.DataFrame):
-                X_pre = X_pre.reindex(
-                    columns=model_loader.feature_names, fill_value=0.0
-                )
+                X_pre = X_pre.reindex(columns=model_loader.feature_names, fill_value=0.0)
                 x = X_pre.values.astype(np.float32)
             else:
                 x = X_pre
@@ -859,9 +809,7 @@ async def check_live_game(req: LiveGameRequest):
             elif 0 in classes:
                 idx_red = classes.index(0)
 
-        team_blue_prob = (
-            float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
-        )
+        team_blue_prob = float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
         team_red_prob = float(probs[idx_red]) if idx_red < len(probs) else 0.5
         predicted_winner = "red" if team_red_prob > team_blue_prob else "blue"
         confidence = max(team_red_prob, team_blue_prob)

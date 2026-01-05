@@ -438,7 +438,9 @@ class MatchFetcher:
         # Keep latest path for cleanup
         self.checkpoint_loading_path = checkpoint_path
 
-    def fetch_active_game_pre_features(self, game_name: str, tag_line: str, data_miner=None) -> Optional[dict[str, Any]]:
+    def fetch_active_game_pre_features(
+        self, game_name: str, tag_line: str, data_miner=None
+    ) -> Optional[dict[str, Any]]:
         """
         Fetch draft-related features for an active/live game by summoner name and tag.
 
@@ -457,48 +459,45 @@ class MatchFetcher:
         else:
             # Fallback: make request directly
             account = self.requester.make_request(
-                is_v5=True, 
-                endpoint_url=f"/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
+                is_v5=True, endpoint_url=f"/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
             )
-        
+
         if not account or not account.get("puuid"):
             self.logger.info(f"Account not found for {game_name}#{tag_line}")
             return None
-        
+
         puuid = account["puuid"]
         self.logger.info(f"Found PUUID: {puuid} for {game_name}#{tag_line}")
-        
+
         # Step 2: Get encrypted summoner ID from PUUID
         if data_miner:
             summoner = data_miner.get_summoner_by_puuid(puuid)
         else:
             summoner = self.requester.make_request(
-                is_v5=False,
-                endpoint_url=f"/lol/summoner/v4/summoners/by-puuid/{puuid}"
+                is_v5=False, endpoint_url=f"/lol/summoner/v4/summoners/by-puuid/{puuid}"
             )
-        
+
         if not summoner or not summoner.get("id"):
             self.logger.info(f"Summoner not found for PUUID {puuid}")
             return None
-        
+
         encrypted_id = summoner["id"]
         self.logger.info(f"Found encrypted summoner ID: {encrypted_id}")
-        
+
         # Step 3: Get active game
         if data_miner:
             active_game = data_miner.get_active_game(encrypted_id)
         else:
             active_game = self.requester.make_request(
-                is_v5=False,
-                endpoint_url=f"/lol/spectator/v4/active-games/by-summoner/{encrypted_id}"
+                is_v5=False, endpoint_url=f"/lol/spectator/v4/active-games/by-summoner/{encrypted_id}"
             )
-        
+
         if not active_game:
             self.logger.info(f"No active game for {game_name}#{tag_line}")
             return None
-        
+
         self.logger.info(f"Active game found: {active_game.get('gameId')}")
-        
+
         # Parse active game data into match_pre_features format
         # Active game structure is different from completed match
         try:
@@ -509,32 +508,32 @@ class MatchFetcher:
             game_start_time = active_game.get("gameStartTime", 0)  # Unix timestamp in ms
             game_length = active_game.get("gameLength", 0)  # Seconds since game start
             platform_id = active_game.get("platformId")
-            
+
             participants = active_game.get("participants", [])
             banned_champions = active_game.get("bannedChampions", [])
-            
+
             # Sort participants by team (100=blue, 200=red)
             team1_participants = [p["puuid"] for p in participants if p.get("teamId") == 100]
             team2_participants = [p["puuid"] for p in participants if p.get("teamId") == 200]
-            
+
             team1_picks = [p["championId"] for p in participants if p.get("teamId") == 100]
             team2_picks = [p["championId"] for p in participants if p.get("teamId") == 200]
-            
+
             # Extract bans by team
             team1_bans = [b["championId"] for b in banned_champions if b.get("teamId") == 100]
             team2_bans = [b["championId"] for b in banned_champions if b.get("teamId") == 200]
-            
+
             # Pad bans to 5 (some games may have fewer)
             team1_bans += [-1] * (5 - len(team1_bans))
             team2_bans += [-1] * (5 - len(team2_bans))
             team1_bans = team1_bans[:5]
             team2_bans = team2_bans[:5]
-            
+
             # For live games, we don't have role assignments from Riot
             # We'll assign placeholder roles (can be improved with role detection logic)
             team1_roles = ["UNKNOWN"] * len(team1_participants)
             team2_roles = ["UNKNOWN"] * len(team2_participants)
-            
+
             # Try to infer roles from spell1Id (Smite=11 for jungle, etc.)
             # This is a simple heuristic and not perfect
             for i, p in enumerate([p for p in participants if p.get("teamId") == 100]):
@@ -543,13 +542,13 @@ class MatchFetcher:
                 # Smite = jungle
                 if spell1 == 11 or spell2 == 11:
                     team1_roles[i] = "JUNGLE"
-            
+
             for i, p in enumerate([p for p in participants if p.get("teamId") == 200]):
                 spell1 = p.get("spell1Id")
                 spell2 = p.get("spell2Id")
                 if spell1 == 11 or spell2 == 11:
                     team2_roles[i] = "JUNGLE"
-            
+
             return {
                 "match_id": f"LIVE_{game_id}",
                 "game_creation": game_start_time,
