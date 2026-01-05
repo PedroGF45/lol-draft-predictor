@@ -77,11 +77,26 @@ class ModelLoader:
             else:
                 await self._load_from_local(model_bucket)
 
+            # Verify model actually loaded
+            if self.model is None:
+                raise RuntimeError("Model object is None after loading")
+            
             self.is_loaded = True
-            logger.info(f"Model loaded successfully: {self.model_name}")
+            
+            # Provide detailed status
+            status_parts = [f"Model loaded: {self.model_name}"]
+            if self.preprocessor is None:
+                status_parts.append("WARNING: Preprocessor not loaded")
+            if not self.feature_names:
+                status_parts.append("WARNING: Feature names not loaded")
+            if not self.test_metrics:
+                status_parts.append("WARNING: Metrics not loaded")
+            
+            logger.info(" | ".join(status_parts))
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             self.model = None
+            self.is_loaded = False
         finally:
             self._loading = False
 
@@ -96,31 +111,41 @@ class ModelLoader:
         self.run_dir = os.path.dirname(model_path)
 
         # Load model - try pickle first, fallback to joblib
+        model_loaded = False
         try:
             with open(model_path, "rb") as f:
                 self.model = pickle.load(f)
+            logger.info("Model loaded successfully with pickle")
+            model_loaded = True
         except (pickle.UnpicklingError, EOFError, ValueError) as e:
             logger.warning(f"Pickle load failed, trying joblib: {e}")
             try:
                 self.model = joblib.load(model_path)
+                logger.info("Model loaded successfully with joblib")
+                model_loaded = True
             except Exception as e2:
                 logger.error(f"Both pickle and joblib failed for {model_path}: {e2}")
                 raise RuntimeError(f"Failed to load model file: {e2}") from e2
+        
+        if not model_loaded or self.model is None:
+            raise RuntimeError("Model failed to load properly")
 
         # Load preprocessor - try pickle first, fallback to joblib
         try:
             with open(prep_path, "rb") as f:
                 self.preprocessor = pickle.load(f)
+            logger.info("Preprocessor loaded successfully with pickle")
         except (pickle.UnpicklingError, EOFError, ValueError, FileNotFoundError) as e:
             logger.warning(f"Preprocessor pickle load failed: {e}")
             try:
                 if os.path.exists(prep_path):
                     self.preprocessor = joblib.load(prep_path)
+                    logger.info("Preprocessor loaded successfully with joblib")
                 else:
                     logger.warning("Preprocessor file not found, continuing without it")
                     self.preprocessor = None
             except Exception as e2:
-                logger.warning(f"Preprocessor loading skipped: {e2}")
+                logger.warning(f"Preprocessor loading failed completely: {e2}")
                 self.preprocessor = None
 
         # Load metadata
