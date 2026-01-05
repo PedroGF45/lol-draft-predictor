@@ -45,14 +45,7 @@ except Exception:
 
 import logging
 
-from data_extraction.data_miner import DataMiner
-from data_extraction.match_fetcher import MatchFetcher
-from data_extraction.requester import Requester
-from data_preparation.data_cleaner import DataCleaner
-from data_preparation.data_handler import DataHandler
-from feature_engineering.feature_engineer import FeatureEngineer
 from helpers.master_data_registry import MasterDataRegistry
-from helpers.parquet_handler import ParquetHandler
 
 # Import new modular services
 from services.cache_service import CacheService
@@ -192,14 +185,6 @@ cache_service = CacheService()
 rate_limit_service = RateLimitService()
 model_loader = ModelLoader()
 
-# Global pipeline components
-_REQUESTER = None
-_MATCH_FETCHER = None
-_DATA_MINER = None
-_PARQUET_HANDLER = None
-_FEATURE_ENGINEER = None
-_RANDOM_SEED = 42
-
 # ============================================================================
 # Middleware
 # ============================================================================
@@ -250,8 +235,6 @@ async def logging_middleware(request: Request, call_next):
 @app.on_event("startup")
 async def startup_event():
     """Initialize services and load models."""
-    global _REQUESTER, _MATCH_FETCHER, _PARQUET_HANDLER, _FEATURE_ENGINEER, _DATA_MINER
-
     # Setup monitoring
     log_file = os.getenv("LOG_FILE", os.path.join(REPO_ROOT, "logs", "app.log"))
     monitoring.setup(log_level=os.getenv("LOG_LEVEL", "INFO"), log_file=log_file)
@@ -270,57 +253,6 @@ async def startup_event():
         monitoring.info(f"Model loaded: {model_loader.model_name}")
     except Exception as e:
         monitoring.warning(f"Model load deferred: {e}")
-
-    # Initialize pipeline components
-    try:
-        riot_api_key = os.getenv("RIOT_API_KEY")
-        if not riot_api_key:
-            monitoring.warning("RIOT_API_KEY not set. Live game detection disabled.")
-        else:
-            region_v4 = "euw1"
-            region_v5 = "europe"
-            base_url_v4 = f"https://{region_v4}.api.riotgames.com"
-            base_url_v5 = f"https://{region_v5}.api.riotgames.com"
-            headers = {"X-Riot-Token": riot_api_key}
-
-            _REQUESTER = Requester(
-                base_url_v4=base_url_v4,
-                base_url_v5=base_url_v5,
-                headers=headers,
-                logger=logger,
-            )
-            _PARQUET_HANDLER = ParquetHandler(logger=logger, random_state=_RANDOM_SEED)
-            df_target = os.getenv(
-                "PREPROCESSED_DATA_PATH",
-                os.path.join(REPO_ROOT, "data", "preprocessed"),
-            )
-            _MATCH_FETCHER = MatchFetcher(
-                requester=_REQUESTER,
-                logger=logger,
-                parquet_handler=_PARQUET_HANDLER,
-                dataframe_target_path=df_target,
-                checkpoint_loading_path=None,
-                load_percentage=100,
-                random_state=_RANDOM_SEED,
-                master_registry=None,
-                max_workers=1,
-            )
-            _FEATURE_ENGINEER = FeatureEngineer(
-                logger=logger,
-                parquet_handler=_PARQUET_HANDLER,
-                random_state=_RANDOM_SEED,
-            )
-            _DATA_MINER = DataMiner(
-                logger=logger,
-                requester=_REQUESTER,
-                parquet_handler=_PARQUET_HANDLER,
-                raw_data_path=os.path.join(REPO_ROOT, "data", "raw"),
-                patient_zero_game_name="placeholder",
-                patient_zero_tag_line="placeholder",
-            )
-            monitoring.info("Pipeline components initialized")
-    except Exception as e:
-        monitoring.warning(f"Pipeline initialization failed: {e}")
 
     # Mount static files
     static_dir = os.path.join(os.path.dirname(__file__), "static")
