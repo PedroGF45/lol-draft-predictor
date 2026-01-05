@@ -283,7 +283,7 @@ def _init_data_extraction_services():
         from helpers.parquet_handler import ParquetHandler
 
         data_path = os.getenv("DATA_PATH", os.path.join(REPO_ROOT, "data"))
-        parquet_handler = ParquetHandler()
+        parquet_handler = ParquetHandler(logger=monitoring.logger)
 
         _MATCH_FETCHER = MatchFetcher(
             requester=_REQUESTER,
