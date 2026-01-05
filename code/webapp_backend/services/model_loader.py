@@ -80,9 +80,9 @@ class ModelLoader:
             # Verify model actually loaded
             if self.model is None:
                 raise RuntimeError("Model object is None after loading")
-            
+
             self.is_loaded = True
-            
+
             # Provide detailed status
             status_parts = [f"Model loaded: {self.model_name}"]
             if self.preprocessor is None:
@@ -91,7 +91,7 @@ class ModelLoader:
                 status_parts.append("WARNING: Feature names not loaded")
             if not self.test_metrics:
                 status_parts.append("WARNING: Metrics not loaded")
-            
+
             logger.info(" | ".join(status_parts))
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
@@ -126,7 +126,7 @@ class ModelLoader:
             except Exception as e2:
                 logger.error(f"Both pickle and joblib failed for {model_path}: {e2}")
                 raise RuntimeError(f"Failed to load model file: {e2}") from e2
-        
+
         if not model_loaded or self.model is None:
             raise RuntimeError("Model failed to load properly")
 
