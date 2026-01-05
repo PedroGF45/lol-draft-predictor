@@ -281,10 +281,7 @@ def _init_data_extraction_services():
         )
 
         # Initialize FeatureEngineer
-        _FEATURE_ENGINEER = FeatureEngineer(
-            logger=monitoring.logger,
-            parquet_handler=parquet_handler
-        )
+        _FEATURE_ENGINEER = FeatureEngineer(logger=monitoring.logger, parquet_handler=parquet_handler)
 
         monitoring.info("Data extraction services initialized")
     except Exception as e:
@@ -682,9 +679,7 @@ async def check_live_game(req: LiveGameRequest):
         monitoring.info(f"Checking live game for {req.game_name}#{req.tag_line}")
 
         # DataMiner is optional - MatchFetcher will use requester directly if None
-        match_pre_features = _MATCH_FETCHER.fetch_active_game_pre_features(
-            req.game_name, req.tag_line, data_miner=None
-        )
+        match_pre_features = _MATCH_FETCHER.fetch_active_game_pre_features(req.game_name, req.tag_line, data_miner=None)
 
         if not match_pre_features:
             return LiveGameResponse(
