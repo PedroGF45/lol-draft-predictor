@@ -1,20 +1,31 @@
+"""
+Refactored FastAPI application with modular services, enhanced caching, 
+batch predictions, and comprehensive logging.
+
+Key improvements:
+- Separated concerns: cache, rate limiting, model loading, monitoring into services
+- Enhanced Redis integration with fallback caching
+- Batch prediction endpoint
+- Lazy model loading
+- Improved error logging and monitoring
+- URL-based prediction sharing support
+"""
+
 import hashlib
 import json
 import os
 import sys
 import time
-from collections import defaultdict
 from typing import Dict, List, Optional
 
-import joblib
 import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
 
 # Load .env file from repository root
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 load_dotenv(os.path.join(REPO_ROOT, ".env"))
 
-import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -30,16 +41,11 @@ if CODE_ROOT not in sys.path:
 try:
     from modeling.deep_learner import DeepLearningClassifier  # noqa: F401
 except Exception:
-    # If torch isn't available, DL models won't load; handled at runtime
     DeepLearningClassifier = None  # type: ignore
 
 import logging
-
-import pandas as pd
 from data_extraction.data_miner import DataMiner
 from data_extraction.match_fetcher import MatchFetcher
-
-# Import pipeline components for match processing
 from data_extraction.requester import Requester
 from data_preparation.data_cleaner import DataCleaner
 from data_preparation.data_handler import DataHandler
@@ -47,47 +53,75 @@ from feature_engineering.feature_engineer import FeatureEngineer
 from helpers.master_data_registry import MasterDataRegistry
 from helpers.parquet_handler import ParquetHandler
 
-app = FastAPI(title="LoL Draft Predictor API", version="0.1.0")
+# Import new modular services
+from services.cache_service import CacheService
+from services.model_loader import ModelLoader
+from services.monitoring_service import MonitoringService
+from services.rate_limit_service import RateLimitService
+
+# ============================================================================
+# FastAPI App Setup
+# ============================================================================
+
+app = FastAPI(
+    title="LoL Draft Predictor API",
+    version="2.0.0",
+    description="Live game detection and draft prediction with batch processing",
+)
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Rate limiting state
-_RATE_LIMIT_STORE: Dict[str, List[float]] = defaultdict(list)
-_RATE_LIMIT_WINDOW = 60  # seconds
-_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "30"))
-_RATE_LIMIT_REDIS_PREFIX = "ratelimit"
-
-# Optional API key for public endpoints (set API_AUTH_TOKEN to enforce)
-_API_KEY = os.getenv("API_AUTH_TOKEN")
-
-# Stricter cap for expensive match predictions
-_MATCH_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("MATCH_RATE_LIMIT_MAX_REQUESTS", "10"))
-
-# Redis client
-_REDIS_CLIENT: Optional[redis.Redis] = None
+# ============================================================================
+# Pydantic Models
+# ============================================================================
 
 
 class PredictRequest(BaseModel):
-    # Either provide ordered list of values or feature dict
+    """Single prediction request."""
+
     features: Optional[List[float]] = None
     feature_map: Optional[Dict[str, float]] = None
 
 
 class PredictResponse(BaseModel):
+    """Single prediction response with confidence."""
+
     model_name: str
     class_index: int
     class_probabilities: List[float]
+    confidence: float  # Max probability
+    model_config = {"protected_namespaces": ()}
+
+
+class BatchPredictRequest(BaseModel):
+    """Batch prediction request."""
+
+    predictions: List[PredictRequest]
+    include_confidence: bool = True
+
+
+class BatchPredictResponse(BaseModel):
+    """Batch prediction response."""
+
+    model_name: str
+    total_predictions: int
+    successful_predictions: int
+    failed_predictions: int
+    results: List[Dict]  # Each result has class_index, probabilities, confidence
+    processing_time_ms: float
     model_config = {"protected_namespaces": ()}
 
 
 class ModelInfoResponse(BaseModel):
+    """Model metadata response."""
+
     model_name: str
     run_dir: str
     metrics: Dict[str, float]
@@ -97,39 +131,65 @@ class ModelInfoResponse(BaseModel):
 
 
 class MatchPredictRequest(BaseModel):
+    """Match prediction request."""
+
     match_id: str
 
 
 class MatchPredictResponse(BaseModel):
+    """Match prediction response with confidence."""
+
     match_id: str
     team_red_win_probability: float
     team_blue_win_probability: float
-    predicted_winner: str  # "red" or "blue"
+    predicted_winner: str
+    confidence: float  # Max of the two probabilities
+    share_url: Optional[str] = None  # URL to share prediction
 
 
 class LiveGameRequest(BaseModel):
+    """Live game check request."""
+
     game_name: str
     tag_line: str
-    region: str = "euw1"  # default region
+    region: str = "euw1"
 
 
 class LiveGameResponse(BaseModel):
+    """Live game check response."""
+
     has_active_game: bool
     game_id: Optional[str] = None
     team_red_win_probability: Optional[float] = None
     team_blue_win_probability: Optional[float] = None
     predicted_winner: Optional[str] = None
+    confidence: Optional[float] = None
+    share_url: Optional[str] = None
     error: Optional[str] = None
 
 
-# Global cached model and metadata
-_MODEL = None
-_PREPROCESSOR = None
-_MODEL_NAME = None
-_FEATURE_NAMES: Optional[List[str]] = None
-_INPUT_DIM = None
-_RUN_DIR = None
-_TEST_METRICS: Dict[str, float] = {}
+class MetricsResponse(BaseModel):
+    """Application metrics response."""
+
+    uptime_seconds: float
+    requests_total: int
+    requests_errors: int
+    error_rate: float
+    cache_hit_rate: float
+    model_predictions: int
+    batch_predictions: int
+    timestamp: str
+
+
+# ============================================================================
+# Global Services
+# ============================================================================
+
+logger = logging.getLogger("webapp_backend")
+monitoring = MonitoringService("lol-draft-predictor")
+cache_service = CacheService()
+rate_limit_service = RateLimitService()
+model_loader = ModelLoader()
 
 # Global pipeline components
 _REQUESTER = None
@@ -137,333 +197,90 @@ _MATCH_FETCHER = None
 _DATA_MINER = None
 _PARQUET_HANDLER = None
 _FEATURE_ENGINEER = None
-_LOGGER = None
 _RANDOM_SEED = 42
+
+# ============================================================================
+# Middleware
+# ============================================================================
 
 
 @app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    """API key gate (optional) + rate limiting using Redis when available."""
+async def logging_middleware(request: Request, call_next):
+    """Enhanced logging and monitoring for all requests."""
+    start_time = time.time()
     client_ip = request.client.host if request.client else "unknown"
 
-    # Allow public basics
-    if request.url.path in {"/health", "/static/index.html", "/"}:
+    # Allow public endpoints
+    if request.url.path in {"/health", "/static", "/", "/docs", "/openapi.json"}:
         return await call_next(request)
 
-    # API key enforcement if configured
-    if _API_KEY:
-        provided = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-        if provided != _API_KEY:
-            return JSONResponse(status_code=401, content={"error": "Unauthorized"})
-
-    # Pick limit (stricter for match predictions)
-    max_req = _MATCH_RATE_LIMIT_MAX_REQUESTS if request.url.path == "/predict-match" else _RATE_LIMIT_MAX_REQUESTS
-    key_suffix = "match" if request.url.path == "/predict-match" else "default"
-
-    # Prefer Redis fixed window
-    redis_key = f"{_RATE_LIMIT_REDIS_PREFIX}:{client_ip}:{key_suffix}"
-    allowed = await _redis_rate_limit(redis_key, max_req, _RATE_LIMIT_WINDOW)
-    if not allowed:
+    # Rate limiting check
+    endpoint_key = (
+        "match"
+        if request.url.path == "/predict-match"
+        else "batch"
+        if request.url.path == "/batch-predict"
+        else "default"
+    )
+    if not await rate_limit_service.is_allowed(client_ip, endpoint_key):
+        monitoring.log_request(
+            request.url.path, request.method, client_ip, 429, 0, "Rate limit exceeded"
+        )
         return JSONResponse(
             status_code=429,
             content={
                 "error": "Rate limit exceeded",
-                "detail": f"Maximum {max_req} requests per {_RATE_LIMIT_WINDOW}s",
-                "retry_after": int(_RATE_LIMIT_WINDOW),
+                "retry_after": rate_limit_service.window,
             },
         )
 
-    # In-memory fallback if Redis unavailable
-    if _REDIS_CLIENT is None:
-        current_time = time.time()
-        _RATE_LIMIT_STORE[client_ip] = [
-            ts for ts in _RATE_LIMIT_STORE[client_ip] if current_time - ts < _RATE_LIMIT_WINDOW
-        ]
-        if len(_RATE_LIMIT_STORE[client_ip]) >= max_req:
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "error": "Rate limit exceeded",
-                    "detail": f"Maximum {max_req} requests per {_RATE_LIMIT_WINDOW}s",
-                    "retry_after": int(_RATE_LIMIT_WINDOW),
-                },
-            )
-        _RATE_LIMIT_STORE[client_ip].append(current_time)
+    # Process request
+    response = await call_next(request)
 
-    return await call_next(request)
-
-
-async def get_redis():
-    """Get or create Redis client."""
-    global _REDIS_CLIENT
-    if _REDIS_CLIENT is None:
-        redis_url = os.getenv("REDIS_URL")
-        if redis_url:
-            try:
-                _REDIS_CLIENT = await redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
-                await _REDIS_CLIENT.ping()
-                if _LOGGER:
-                    _LOGGER.info("Redis connected")
-            except Exception as e:
-                if _LOGGER:
-                    _LOGGER.warning(f"Redis connection failed: {e}")
-                _REDIS_CLIENT = None
-    return _REDIS_CLIENT
-
-
-async def _redis_rate_limit(key: str, limit: int, window: int) -> bool:
-    """Return True if request is allowed; False if over limit."""
-    r = await get_redis()
-    if not r:
-        return True
-    try:
-        count = await r.incr(key)
-        if count == 1:
-            await r.expire(key, window)
-        return count <= limit
-    except Exception:
-        return True
-
-
-async def cache_get(key: str) -> Optional[str]:
-    """Get value from Redis cache."""
-    r = await get_redis()
-    if r:
-        try:
-            return await r.get(key)
-        except Exception:
-            return None
-    return None
-
-
-async def cache_set(key: str, value: str, ttl: int = 3600):
-    """Set value in Redis cache with TTL."""
-    r = await get_redis()
-    if r:
-        try:
-            await r.setex(key, ttl, value)
-        except Exception:
-            pass
-
-
-def get_models_path() -> str:
-    # Prefer env var if set; otherwise use repo-root/models as fallback
-    env_path = os.getenv("MODELS_PATH")
-    if env_path and os.path.isdir(env_path):
-        return env_path
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
-    return os.path.join(repo_root, "models")
-
-
-def download_from_hf(filename: str, subfolder: Optional[str] = None) -> str:
-    """Download artifact from Hugging Face Hub with caching."""
-    from huggingface_hub import hf_hub_download
-
-    hf_repo = os.getenv("HF_MODEL_REPO", "PedroGF45/lol-draft-predictor")
-    hf_rev = os.getenv("HF_MODEL_REV", "main")
-    hf_token = os.getenv("HF_TOKEN")
-
-    return hf_hub_download(
-        repo_id=hf_repo,
-        filename=filename,
-        subfolder=subfolder,
-        revision=hf_rev,
-        token=hf_token,
-        cache_dir=os.getenv("HF_CACHE_DIR"),
+    # Log request
+    duration_ms = (time.time() - start_time) * 1000
+    error = None if response.status_code < 400 else f"HTTP {response.status_code}"
+    monitoring.log_request(
+        request.url.path, request.method, client_ip, response.status_code, duration_ms, error
     )
 
-
-def _normpath(path_str: str) -> str:
-    """Normalize path separators to be OS-agnostic (handles Windows backslashes on Linux)."""
-    return os.path.normpath(path_str.replace("\\", os.sep)) if path_str else path_str
+    return response
 
 
-def load_best_model(model_bucket: str = "DeepLearningClassifier"):
-    global _MODEL, _PREPROCESSOR, _MODEL_NAME, _FEATURE_NAMES, _INPUT_DIM, _RUN_DIR, _TEST_METRICS
-
-    # Try HF first if configured
-    use_hf = os.getenv("HF_MODEL_REPO") is not None
-    
-    if use_hf:
-        try:
-            if _LOGGER:
-                _LOGGER.info(f"Loading model from Hugging Face: {os.getenv('HF_MODEL_REPO')}")
-            # Download artifacts from HF
-            model_path = download_from_hf("model.pkl")
-            info_path = download_from_hf("info.json")
-            metrics_path = download_from_hf("metrics.json")
-            prep_path = download_from_hf("preprocessor.pkl")
-            
-            _MODEL_NAME = model_bucket
-            _RUN_DIR = os.path.dirname(model_path)
-        except Exception as e:
-            if _LOGGER:
-                _LOGGER.warning(f"HF download failed: {e}. Falling back to local models.")
-            use_hf = False
-    
-    if not use_hf:
-        # Fallback to local models
-        models_path = get_models_path()
-        best_json = os.path.join(models_path, model_bucket, "best.json")
-        if not os.path.exists(best_json):
-            raise FileNotFoundError(f"best.json not found at {best_json}. Train and save a model first.")
-
-        with open(best_json, "r", encoding="utf-8") as f:
-            best = json.load(f)
-
-        run_dir_rel = best.get("run_dir")
-        run_dir = os.path.join(models_path, _normpath(run_dir_rel)) if run_dir_rel else None
-        if not run_dir or not os.path.isdir(run_dir):
-            raise FileNotFoundError("Run directory for best model not found.")
-
-        model_rel = _normpath(best.get("model_path") or "model.pkl")
-        model_path = model_rel if os.path.isabs(model_rel) else os.path.join(models_path, model_rel)
-        if not os.path.exists(model_path):
-            # fallback to run_dir/model.pkl
-            model_path = os.path.join(run_dir, "model.pkl")
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model artifact not found at {model_path}.")
-        
-        info_path = os.path.join(run_dir, "info.json")
-        metrics_path = os.path.join(run_dir, "metrics.json")
-        _MODEL_NAME = model_bucket
-        _RUN_DIR = run_dir
-
-    # Load model - try joblib first (for DL models saved via joblib), then torch
-    try:
-        _MODEL = joblib.load(model_path)
-        if hasattr(_MODEL, "to") and callable(getattr(_MODEL, "to")):
-            try:
-                import torch
-
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                _MODEL.to(device)
-                if not hasattr(_MODEL, "device"):
-                    setattr(_MODEL, "device", device)
-            except Exception:
-                # Torch not available; continue with CPU-only model object
-                pass
-    except Exception as joblib_err:
-        # If joblib fails, try torch.load (for raw state dicts)
-        try:
-            import torch
-            import torch.nn as nn
-
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            obj = torch.load(model_path, map_location=device, weights_only=False)
-            if isinstance(obj, nn.Module):
-                _MODEL = obj.to(device)
-                if not hasattr(_MODEL, "device"):
-                    setattr(_MODEL, "device", device)
-            elif isinstance(obj, dict) and DeepLearningClassifier is not None:
-                # Assume binary classification for team1_win
-                num_classes = 2
-                _MODEL = DeepLearningClassifier(
-                    input_dim=int(_INPUT_DIM or 0), num_classes=num_classes, require_cuda=False
-                )  # type: ignore
-                _MODEL.load_state_dict(obj)
-            else:
-                raise joblib_err
-        except Exception:
-            raise joblib_err
-
-    # Load info.json for feature names and input_dim
-    _FEATURE_NAMES = None
-    _INPUT_DIM = None
-    if os.path.exists(info_path):
-        with open(info_path, "r", encoding="utf-8") as f:
-            info = json.load(f)
-        _FEATURE_NAMES = info.get("feature_names")
-        _INPUT_DIM = info.get("input_dim")
-    
-    # Load preprocessor
-    if 'prep_path' in locals() and prep_path and os.path.exists(prep_path):
-        try:
-            _PREPROCESSOR = joblib.load(prep_path)
-            if _LOGGER:
-                _LOGGER.info("Preprocessor loaded successfully")
-        except Exception as e:
-            if _LOGGER:
-                _LOGGER.warning(f"Failed to load preprocessor: {e}")
-    
-    # Load metrics
-    if 'metrics_path' in locals() and metrics_path and os.path.exists(metrics_path):
-        try:
-            with open(metrics_path, "r", encoding="utf-8") as f:
-                metrics = json.load(f)
-            _TEST_METRICS = metrics.get("test_metrics", {})
-        except Exception as e:
-            if _LOGGER:
-                _LOGGER.warning(f"Failed to load metrics: {e}")
-
-    # sanity
-    if _INPUT_DIM is None:
-        # derive from model if possible (DL has attribute input_dim)
-        _INPUT_DIM = getattr(_MODEL, "input_dim", None)
-    if _INPUT_DIM is None:
-        raise RuntimeError("Unable to determine model input_dim for inference.")
-
-
-def load_best_overall_model():
-    """Load the globally best model from HF or local best_overall.json."""
-    # If HF configured, use direct downloads (artifacts uploaded are already 'best')
-    if os.getenv("HF_MODEL_REPO"):
-        return load_best_model()
-    
-    # Otherwise fall back to local best_overall.json
-    models_path = get_models_path()
-    overall_json = os.path.join(models_path, "best_overall.json")
-    if not os.path.exists(overall_json):
-        raise FileNotFoundError(
-            f"best_overall.json not found at {overall_json}. Train models to generate it, or load per-bucket best.json."
-        )
-
-    with open(overall_json, "r", encoding="utf-8") as f:
-        best = json.load(f)
-
-    # Reuse load_best_model path by deriving bucket from run_dir if possible
-    run_dir_rel = best.get("run_dir")
-    if not run_dir_rel:
-        raise RuntimeError("Invalid best_overall.json: missing run_dir")
-
-    # Expect run_dir like "<ModelName>/<timestamp>"
-    parts = run_dir_rel.replace("\\", "/").split("/")
-    if not parts or len(parts) < 2:
-        raise RuntimeError("Invalid run_dir format in best_overall.json")
-    model_bucket = parts[0]
-
-    # Delegate to per-bucket loader for consistent artifact handling
-    return load_best_model(model_bucket)
+# ============================================================================
+# Event Handlers
+# ============================================================================
 
 
 @app.on_event("startup")
-def startup_event():
-    global _REQUESTER, _MATCH_FETCHER, _PARQUET_HANDLER, _FEATURE_ENGINEER, _LOGGER
+async def startup_event():
+    """Initialize services and load models."""
+    global _REQUESTER, _MATCH_FETCHER, _PARQUET_HANDLER, _FEATURE_ENGINEER, _DATA_MINER
 
-    # Setup logger
-    _LOGGER = logging.getLogger("webapp_backend")
-    if not _LOGGER.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-        _LOGGER.addHandler(handler)
-        _LOGGER.setLevel(logging.INFO)
+    # Setup monitoring
+    log_file = os.getenv("LOG_FILE", os.path.join(REPO_ROOT, "logs", "app.log"))
+    monitoring.setup(log_level=os.getenv("LOG_LEVEL", "INFO"), log_file=log_file)
 
-    # Load model at startup, but don't crash server if loading fails
+    monitoring.info("Starting LoL Draft Predictor v2.0")
+
+    # Initialize cache service
+    await cache_service.init()
+
+    # Initialize rate limiting
+    await rate_limit_service.init()
+
+    # Load model with lazy initialization
     try:
-        # Prefer globally best model when available
-        try:
-            load_best_overall_model()
-        except Exception as _:
-            # Fallback to DeepLearningClassifier bucket
-            load_best_model("DeepLearningClassifier")
+        await model_loader.load_best_model("DeepLearningClassifier")
+        monitoring.info(f"Model loaded: {model_loader.model_name}")
     except Exception as e:
-        _LOGGER.warning(f"Model load deferred: {e}")
+        monitoring.warning(f"Model load deferred: {e}")
 
     # Initialize pipeline components
     try:
         riot_api_key = os.getenv("RIOT_API_KEY")
         if not riot_api_key:
-            _LOGGER.warning("RIOT_API_KEY not set. Match prediction will not work.")
+            monitoring.warning("RIOT_API_KEY not set. Live game detection disabled.")
         else:
             region_v4 = "euw1"
             region_v5 = "europe"
@@ -471,466 +288,487 @@ def startup_event():
             base_url_v5 = f"https://{region_v5}.api.riotgames.com"
             headers = {"X-Riot-Token": riot_api_key}
 
-            _REQUESTER = Requester(base_url_v4=base_url_v4, base_url_v5=base_url_v5, headers=headers, logger=_LOGGER)
-            _PARQUET_HANDLER = ParquetHandler(logger=_LOGGER, random_state=_RANDOM_SEED)
-            # Resolve a valid target directory for MatchFetcher (required by its init)
-            df_target = os.getenv("PREPROCESSED_DATA_PATH")
-            if not df_target:
-                df_target = os.path.join(REPO_ROOT, "data", "preprocessed")
+            _REQUESTER = Requester(
+                base_url_v4=base_url_v4,
+                base_url_v5=base_url_v5,
+                headers=headers,
+                logger=logger,
+            )
+            _PARQUET_HANDLER = ParquetHandler(logger=logger, random_state=_RANDOM_SEED)
+            df_target = os.getenv(
+                "PREPROCESSED_DATA_PATH",
+                os.path.join(REPO_ROOT, "data", "preprocessed"),
+            )
             _MATCH_FETCHER = MatchFetcher(
                 requester=_REQUESTER,
-                logger=_LOGGER,
+                logger=logger,
                 parquet_handler=_PARQUET_HANDLER,
                 dataframe_target_path=df_target,
                 checkpoint_loading_path=None,
                 load_percentage=100,
                 random_state=_RANDOM_SEED,
-                master_registry=None,  # No registry needed for single match
+                master_registry=None,
                 max_workers=1,
             )
             _FEATURE_ENGINEER = FeatureEngineer(
-                logger=_LOGGER, parquet_handler=_PARQUET_HANDLER, random_state=_RANDOM_SEED
+                logger=logger,
+                parquet_handler=_PARQUET_HANDLER,
+                random_state=_RANDOM_SEED,
             )
-            
-            # Initialize DataMiner for account lookups (for live game detection)
-            try:
-                _DATA_MINER = DataMiner(
-                    logger=_LOGGER,
-                    requester=_REQUESTER,
-                    parquet_handler=_PARQUET_HANDLER,
-                    raw_data_path=os.path.join(REPO_ROOT, "data", "raw"),
-                    patient_zero_game_name="placeholder",  # Not used for live game checks
-                    patient_zero_tag_line="placeholder",
-                )
-                _LOGGER.info("DataMiner initialized for live game checks")
-            except Exception as e:
-                _LOGGER.warning(f"DataMiner initialization failed (live game checks may not work): {e}")
-            
-            _LOGGER.info("Pipeline components initialized")
+            _DATA_MINER = DataMiner(
+                logger=logger,
+                requester=_REQUESTER,
+                parquet_handler=_PARQUET_HANDLER,
+                raw_data_path=os.path.join(REPO_ROOT, "data", "raw"),
+                patient_zero_game_name="placeholder",
+                patient_zero_tag_line="placeholder",
+            )
+            monitoring.info("Pipeline components initialized")
     except Exception as e:
-        _LOGGER.error(f"Failed to initialize pipeline: {e}")
+        monitoring.warning(f"Pipeline initialization failed: {e}")
 
-    # Mount static
+    # Mount static files
     static_dir = os.path.join(os.path.dirname(__file__), "static")
     if os.path.isdir(static_dir):
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+    monitoring.info("Startup complete")
 
 
-@app.get("/")
-def root():
-    return RedirectResponse(url="/static/index.html")
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up services."""
+    monitoring.info("Shutting down...")
+    await cache_service.close()
+    await rate_limit_service.close()
+    await model_loader.unload()
 
 
-@app.get("/model-info", response_model=ModelInfoResponse)
-def model_info():
-    return ModelInfoResponse(
-        model_name=_MODEL_NAME or "unknown",
-        run_dir=_RUN_DIR or "",
-        metrics=_TEST_METRICS or {},
-        feature_names=_FEATURE_NAMES,
-        input_dim=int(_INPUT_DIM or 0),
-    )
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+
+def _generate_share_url(prediction_id: str) -> str:
+    """Generate shareable URL for a prediction."""
+    return f"/share/{prediction_id}"
+
+
+def _create_prediction_id(data: dict) -> str:
+    """Create unique ID for prediction sharing."""
+    content = json.dumps(data, sort_keys=True)
+    return hashlib.sha256(content.encode()).hexdigest()[:12]
 
 
 def _prepare_features(req: PredictRequest) -> np.ndarray:
-    # Determine input vector
+    """Prepare feature array from request."""
     if req.feature_map:
-        if not _FEATURE_NAMES:
+        if not model_loader.feature_names:
             raise HTTPException(
-                status_code=400, detail="Model does not expose feature_names. Provide ordered 'features' list instead."
+                status_code=400,
+                detail="Model does not expose feature_names. Provide ordered 'features' list instead.",
             )
         try:
-            vec = [float(req.feature_map[name]) for name in _FEATURE_NAMES]
+            vec = [float(req.feature_map[name]) for name in model_loader.feature_names]
         except KeyError as e:
             raise HTTPException(status_code=400, detail=f"Missing feature: {e.args[0]}")
         arr = np.asarray(vec, dtype=np.float32).reshape(1, -1)
     elif req.features:
         arr = np.asarray(req.features, dtype=np.float32).reshape(1, -1)
-        if arr.shape[1] != int(_INPUT_DIM):
-            raise HTTPException(status_code=400, detail=f"Expected {_INPUT_DIM} features, got {arr.shape[1]}")
+        if arr.shape[1] != int(model_loader.input_dim or 0):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Expected {model_loader.input_dim} features, got {arr.shape[1]}",
+            )
     else:
-        raise HTTPException(status_code=400, detail="Provide 'features' (ordered list) or 'feature_map' (dict)")
-
-    # Apply preprocessor if available
-    if _PREPROCESSOR is not None:
-        try:
-            import pandas as pd
-
-            # Prefer passing a DataFrame with feature names when available
-            df = pd.DataFrame(arr, columns=_FEATURE_NAMES) if _FEATURE_NAMES else pd.DataFrame(arr)
-            arr = _PREPROCESSOR.transform(df)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Preprocessing failed: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Provide 'features' (ordered list) or 'feature_map' (dict)",
+        )
 
     return arr
 
 
+# ============================================================================
+# Endpoints
+# ============================================================================
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok", "model_loaded": model_loader.is_loaded}
+
+
+@app.get("/")
+async def root():
+    """Redirect to static frontend."""
+    return RedirectResponse(url="/static/index.html")
+
+
+@app.get("/model-info", response_model=ModelInfoResponse)
+async def model_info():
+    """Get model metadata."""
+    if not model_loader.is_loaded:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    return ModelInfoResponse(
+        model_name=model_loader.model_name or "unknown",
+        run_dir=model_loader.run_dir or "",
+        metrics=model_loader.test_metrics or {},
+        feature_names=model_loader.feature_names,
+        input_dim=int(model_loader.input_dim or 0),
+    )
+
+
 @app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest):
-    if _MODEL is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+async def predict(req: PredictRequest):
+    """Single prediction endpoint."""
+    if not model_loader.is_loaded or model_loader.model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
 
-    x = _prepare_features(req)
+    start_time = time.time()
 
-    # Log model info for this prediction
     try:
-        _LOGGER.info(
-            "Predict: model=%s type=%s input_dim=%s run_dir=%s",
-            _MODEL_NAME or "unknown",
-            type(_MODEL).__name__ if _MODEL is not None else "None",
-            str(_INPUT_DIM),
-            _RUN_DIR or "",
+        x = _prepare_features(req)
+        class_index, probs = model_loader.predict(x)
+
+        monitoring.log_prediction(
+            is_batch=False,
+            num_samples=1,
+            duration_ms=(time.time() - start_time) * 1000,
+            confidence=float(np.max(probs)),
         )
-    except Exception:
-        pass
 
-    # DeepLearningClassifier inference
-    if hasattr(_MODEL, "forward"):
-        import torch
+        return PredictResponse(
+            model_name=model_loader.model_name or "",
+            class_index=int(class_index),
+            class_probabilities=list(map(float, probs)),
+            confidence=float(np.max(probs)),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        monitoring.log_prediction(
+            is_batch=False,
+            num_samples=1,
+            duration_ms=(time.time() - start_time) * 1000,
+            error=str(e),
+        )
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-        _MODEL.eval()
-        with torch.no_grad():
-            inp = torch.FloatTensor(x).to(getattr(_MODEL, "device", "cpu"))
-            logits = _MODEL.forward(inp)
-            probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-            pred_idx = int(np.argmax(probs))
-            return PredictResponse(
-                model_name=_MODEL_NAME or "", class_index=pred_idx, class_probabilities=list(map(float, probs))
+
+@app.post("/batch-predict", response_model=BatchPredictResponse)
+async def batch_predict(req: BatchPredictRequest):
+    """Batch prediction endpoint for multiple samples."""
+    if not model_loader.is_loaded or model_loader.model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    start_time = time.time()
+    results = []
+    failed = 0
+
+    monitoring.info(f"Batch prediction: {len(req.predictions)} samples")
+
+    for i, pred_req in enumerate(req.predictions):
+        try:
+            x = _prepare_features(pred_req)
+            class_index, probs = model_loader.predict(x)
+
+            result = {
+                "index": i,
+                "class_index": int(class_index),
+                "class_probabilities": list(map(float, probs)),
+            }
+            if req.include_confidence:
+                result["confidence"] = float(np.max(probs))
+
+            results.append(result)
+        except Exception as e:
+            monitoring.warning(f"Batch prediction {i} failed: {e}")
+            failed += 1
+            results.append(
+                {
+                    "index": i,
+                    "error": str(e),
+                }
             )
 
-    # sklearn classifiers
-    if hasattr(_MODEL, "predict_proba"):
-        probs = _MODEL.predict_proba(x)[0]
-        pred_idx = int(np.argmax(probs))
-        return PredictResponse(
-            model_name=_MODEL_NAME or "", class_index=pred_idx, class_probabilities=list(map(float, probs))
-        )
+    duration_ms = (time.time() - start_time) * 1000
 
-    # fallback to predict only
-    pred = _MODEL.predict(x)
-    return PredictResponse(model_name=_MODEL_NAME or "", class_index=int(pred[0]), class_probabilities=[])
+    monitoring.log_prediction(
+        is_batch=True,
+        num_samples=len(req.predictions),
+        duration_ms=duration_ms,
+    )
+
+    return BatchPredictResponse(
+        model_name=model_loader.model_name or "",
+        total_predictions=len(req.predictions),
+        successful_predictions=len(req.predictions) - failed,
+        failed_predictions=failed,
+        results=results,
+        processing_time_ms=duration_ms,
+    )
 
 
 @app.post("/predict-match", response_model=MatchPredictResponse)
 async def predict_match(req: MatchPredictRequest):
-    """Predict match outcome from match ID by running full pipeline."""
-    if not _REQUESTER or not _MATCH_FETCHER or not _FEATURE_ENGINEER:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.")
+    """Predict match outcome from match ID."""
+    if (
+        not _REQUESTER
+        or not _MATCH_FETCHER
+        or not _FEATURE_ENGINEER
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.",
+        )
 
-    if _MODEL is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    if not model_loader.is_loaded or model_loader.model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
 
     # Check cache first
-    cache_key = f"match_prediction:{req.match_id}"
-    cached = await cache_get(cache_key)
+    cache_key = f"match_pred:{req.match_id}"
+    cached = await cache_service.get(cache_key)
     if cached:
-        try:
-            result = json.loads(cached)
-            _LOGGER.info(f"Cache hit for match {req.match_id}")
-            return MatchPredictResponse(**result)
-        except Exception:
-            pass
+        monitoring.log_cache("hit", cache_key)
+        return MatchPredictResponse(**json.loads(cached))
+
+    monitoring.log_cache("miss", cache_key)
+
+    start_time = time.time()
 
     try:
-        # Process into DataFrame (use MatchFetcher helper on match_id)
-        _LOGGER.info(f"Fetching and processing match {req.match_id}")
+        monitoring.info(f"Processing match {req.match_id}")
+
+        # Process match using match fetcher
         kpi_limit = int(os.getenv("PREDICT_KPI_LIMIT", "10"))
         match_record, player_history_records = _MATCH_FETCHER._process_single_match(
             req.match_id, match_limit_per_player=kpi_limit
         )
+
         if not match_record:
             raise HTTPException(status_code=400, detail="Failed to process match data")
 
-        # Create DataFrames from the processed records
+        # Create DataFrames
         match_df = pd.DataFrame([match_record])
         player_history_df = pd.DataFrame(player_history_records)
 
-        # Create temporary DataHandler for this match
+        # Join data
         temp_handler = DataHandler(
-            logger=_LOGGER,
+            logger=logger,
             parquet_handler=_PARQUET_HANDLER,
             target_feature="team1_win",
             random_state=_RANDOM_SEED,
             master_registry=None,
         )
 
-        # Join match and player data (similar to DataHandler.join_match_and_player_data logic)
-        # This creates aggregated player stats per match
-        # Use the join method to combine match and player history data
-        # We'll save to temporary paths and load them back
         import tempfile
-
-        from data_preparation.data_handler import DataHandler as DH
 
         with tempfile.TemporaryDirectory() as tmpdir:
             match_tmp = os.path.join(tmpdir, "match.parquet")
             player_tmp = os.path.join(tmpdir, "player.parquet")
             _PARQUET_HANDLER.write_parquet(match_df, match_tmp)
             _PARQUET_HANDLER.write_parquet(player_history_df, player_tmp)
+            temp_handler.join_match_and_player_data(
+                match_parquet_path=match_tmp, player_parquet_path=player_tmp
+            )
 
-            # Join the data
-            temp_handler.join_match_and_player_data(match_parquet_path=match_tmp, player_parquet_path=player_tmp)
-
-        # Set as "test" data (we're predicting, not training)
         combined_df = temp_handler.get_combined_dataframe()
 
-        # Extract features that match the model's training features
-        # Generate the same derived features used during training
+        # Generate features
         try:
             X = _FEATURE_ENGINEER.generate_new_features(combined_df.copy())
         except Exception:
-            # Fall back to raw combined data if feature generation fails
             X = combined_df.copy()
 
         # Drop non-feature columns
-        drop_cols = [col for col in ["team1_win", "match_id", "game_version"] if col in X.columns]
+        drop_cols = [
+            col
+            for col in ["team1_win", "match_id", "game_version"]
+            if col in X.columns
+        ]
         if drop_cols:
             X = X.drop(columns=drop_cols)
 
-        _LOGGER.info(f"Available features after joining: {X.shape[1]} columns")
-
-        # Apply preprocessor first if available (e.g., to generate PCA components)
-        if _PREPROCESSOR is not None:
+        # Apply preprocessing
+        if model_loader.preprocessor is not None:
             try:
-                _LOGGER.info(f"Applying saved preprocessor to {X.shape[1]} features")
-                X_pre = _PREPROCESSOR.transform(X if isinstance(X, pd.DataFrame) else pd.DataFrame(X))
+                X_pre = model_loader.preprocessor.transform(
+                    X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+                )
             except Exception as e:
-                _LOGGER.error(f"Preprocessor transform failed: {e}")
+                monitoring.warning(f"Preprocessing failed: {e}")
                 X_pre = X
         else:
             X_pre = X
 
-        # If model specifies required feature names, align after preprocessing
-        if _FEATURE_NAMES:
+        # Align features
+        if model_loader.feature_names:
             if isinstance(X_pre, pd.DataFrame):
-                available = set(X_pre.columns)
-                required = set(_FEATURE_NAMES)
-                missing = required - available
-                extra = available - required
-
-                # Concise summary of alignment
-                try:
-                    _LOGGER.info(
-                        "Feature alignment: required=%d, present=%d, missing=%d (zero-filled), extra=%d (ignored)",
-                        len(_FEATURE_NAMES),
-                        len(available),
-                        len(missing),
-                        len(extra),
-                    )
-                except Exception:
-                    pass
-
-                # Debug sample of missing names (optional)
-                try:
-                    import logging as _py_logging
-
-                    if missing and _LOGGER.isEnabledFor(_py_logging.DEBUG):
-                        _LOGGER.debug("Missing features sample: %s", list(missing)[:5])
-                except Exception:
-                    pass
-
-                # Reindex to fill missing and drop extras in one step
-                try:
-                    X_pre = X_pre.reindex(columns=_FEATURE_NAMES, fill_value=0.0)
-                except Exception:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Cannot predict: model expects {len(_FEATURE_NAMES)} features but only {len(available)} available. "
-                            f"This match may be missing data or model was trained on different feature pipeline."
-                        ),
-                    )
+                X_pre = X_pre.reindex(
+                    columns=model_loader.feature_names, fill_value=0.0
+                )
                 x = X_pre.values.astype(np.float32)
             else:
-                # If preprocessing returned ndarray, ensure shape matches
                 x = X_pre
-                if x.ndim != 2 or x.shape[1] != int(_INPUT_DIM):
-                    raise HTTPException(
-                        status_code=400, detail="Preprocessed features do not match model input dimension"
-                    )
         else:
-            # No feature list declared; use numeric matrix
             x = X_pre.values if isinstance(X_pre, pd.DataFrame) else X_pre
 
-        _LOGGER.info(f"Input shape for model: {x.shape}")
-
-        # Debug: Log feature vector stats before prediction
-        try:
-            if isinstance(x, np.ndarray):
-                _LOGGER.info(
-                    "Feature vector stats: min=%.4f, max=%.4f, mean=%.4f, std=%.4f, zeros=%d/%d",
-                    float(np.min(x)),
-                    float(np.max(x)),
-                    float(np.mean(x)),
-                    float(np.std(x)),
-                    int(np.sum(x == 0)),
-                    x.size,
-                )
-                # Log top 5 largest/smallest values
-                top_vals = np.argsort(x.flatten())[-5:][::-1]
-                bottom_vals = np.argsort(x.flatten())[:5]
-                _LOGGER.info(
-                    "Top 5 values (idx, val): %s | Bottom 5 (idx, val): %s",
-                    [(int(i), float(x.flatten()[i])) for i in top_vals],
-                    [(int(i), float(x.flatten()[i])) for i in bottom_vals],
-                )
-        except Exception as e:
-            _LOGGER.warning(f"Failed to log feature stats: {e}")
-
-        # Log model info for this match prediction
-        try:
-            _LOGGER.info(
-                "PredictMatch: model=%s type=%s input_dim=%s run_dir=%s",
-                _MODEL_NAME or "unknown",
-                type(_MODEL).__name__ if _MODEL is not None else "None",
-                str(_INPUT_DIM),
-                _RUN_DIR or "",
-            )
-        except Exception:
-            pass
-
         # Predict
-        if hasattr(_MODEL, "forward"):
-            import torch
+        class_index, probs = model_loader.predict(x)
 
-            _MODEL.eval()
-            with torch.no_grad():
-                inp = torch.FloatTensor(x).to(getattr(_MODEL, "device", "cpu"))
-                logits = _MODEL.forward(inp)
-                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-        elif hasattr(_MODEL, "predict_proba"):
-            probs = _MODEL.predict_proba(x)[0]
-        else:
-            pred = _MODEL.predict(x)
-            probs = np.array([1.0 - pred[0], pred[0]]) if pred[0] in [0, 1] else np.array([0.5, 0.5])
+        # Map to probabilities
+        idx_blue = 1
+        idx_red = 0
+        if hasattr(model_loader.model, "classes_"):
+            classes = list(model_loader.model.classes_)
+            if True in classes:
+                idx_blue = classes.index(True)
+            elif 1 in classes:
+                idx_blue = classes.index(1)
+            if False in classes:
+                idx_red = classes.index(False)
+            elif 0 in classes:
+                idx_red = classes.index(0)
 
-        # Label mapping:
-        # - 1 = team1_win (team1 is Blue side, 100)
-        # - 0 = team1_loss (team2 is Red side, 200)
-        # Respect model.classes_ order when available
-        idx_blue = None
-        idx_red = None
-        try:
-            if hasattr(_MODEL, "classes_"):
-                classes = list(getattr(_MODEL, "classes_", []))
-                _LOGGER.info("Model classes_: %s", classes)
-                # Find indices where class 1 (True/team1_win) and 0 (False/team1_loss) map in probs
-                if True in classes:
-                    idx_blue = classes.index(True)
-                elif 1 in classes:
-                    idx_blue = classes.index(1)
-                if False in classes:
-                    idx_red = classes.index(False)
-                elif 0 in classes:
-                    idx_red = classes.index(0)
-                _LOGGER.info("Class index mapping: idx_blue=%s (True/1), idx_red=%s (False/0)", idx_blue, idx_red)
-        except Exception as e:
-            _LOGGER.warning(f"Failed to resolve class indices: {e}")
-
-        # Fallback if class resolution failed
-        if idx_blue is None:
-            idx_blue = 1
-        if idx_red is None:
-            idx_red = 0
-
-        team_blue_prob = float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
+        team_blue_prob = (
+            float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
+        )
         team_red_prob = float(probs[idx_red]) if idx_red < len(probs) else 0.5
 
-        _LOGGER.info(
-            "Probabilities: red_prob=%.4f (idx %d), blue_prob=%.4f (idx %d)",
-            team_red_prob,
-            idx_red,
-            team_blue_prob,
-            idx_blue,
-        )
-
         predicted_winner = "red" if team_red_prob > team_blue_prob else "blue"
+        confidence = max(team_red_prob, team_blue_prob)
+
+        # Create prediction ID for sharing
+        pred_data = {
+            "match_id": req.match_id,
+            "red_prob": team_red_prob,
+            "blue_prob": team_blue_prob,
+        }
+        pred_id = _create_prediction_id(pred_data)
 
         result = MatchPredictResponse(
             match_id=req.match_id,
             team_red_win_probability=team_red_prob,
             team_blue_win_probability=team_blue_prob,
             predicted_winner=predicted_winner,
+            confidence=confidence,
+            share_url=_generate_share_url(pred_id),
         )
 
         # Cache for 1 hour
-        await cache_set(cache_key, result.model_dump_json(), ttl=3600)
+        await cache_service.set(cache_key, result.model_dump_json(), ttl=3600)
+
+        duration_ms = (time.time() - start_time) * 1000
+        monitoring.log_prediction(
+            is_batch=False,
+            num_samples=1,
+            duration_ms=duration_ms,
+            confidence=confidence,
+        )
 
         return result
 
     except HTTPException:
         raise
     except Exception as e:
-        _LOGGER.error(f"Prediction failed: {e}", exc_info=True)
+        monitoring.log_prediction(
+            is_batch=False,
+            num_samples=1,
+            duration_ms=(time.time() - start_time) * 1000,
+            error=str(e),
+        )
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
 
 @app.post("/check-live-game", response_model=LiveGameResponse)
 async def check_live_game(req: LiveGameRequest):
-    """Check if user has active game and predict outcome if available."""
-    if not _REQUESTER or not _MATCH_FETCHER or not _FEATURE_ENGINEER:
-        raise HTTPException(status_code=500, detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.")
+    """Check for active game and predict outcome."""
+    if (
+        not _REQUESTER
+        or not _MATCH_FETCHER
+        or not _FEATURE_ENGINEER
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Pipeline not initialized. Set RIOT_API_KEY environment variable.",
+        )
 
-    if _MODEL is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    if not model_loader.is_loaded or model_loader.model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    start_time = time.time()
 
     try:
-        # Fetch active game pre-features using DataMiner for account lookups
-        _LOGGER.info(f"Checking live game for {req.game_name}#{req.tag_line} in {req.region}")
-        match_pre_features = _MATCH_FETCHER.fetch_active_game_pre_features(req.game_name, req.tag_line, data_miner=_DATA_MINER)
-        
+        monitoring.info(f"Checking live game for {req.game_name}#{req.tag_line}")
+
+        match_pre_features = _MATCH_FETCHER.fetch_active_game_pre_features(
+            req.game_name, req.tag_line, data_miner=_DATA_MINER
+        )
+
         if not match_pre_features:
             return LiveGameResponse(
                 has_active_game=False,
-                error="No active game found. Cannot predict completed games."
+                error="No active game found.",
             )
-        
-        # Process live game similar to completed match
-        participants = match_pre_features.get("team1_participants") + match_pre_features.get("team2_participants")
-        _LOGGER.info(f"Live game found with {len(participants)} participants")
-        
-        # Fetch player data (summoner level, mastery, rank, KPIs)
-        summoner_levels = _MATCH_FETCHER.fetch_summoner_level_data(participants=participants)
-        
-        champion_picks = match_pre_features.get("team1_picks") + match_pre_features.get("team2_picks")
+
+        # Process similar to completed match
+        participants = (
+            match_pre_features.get("team1_participants", [])
+            + match_pre_features.get("team2_participants", [])
+        )
+
+        monitoring.info(f"Live game found with {len(participants)} participants")
+
+        # Fetch player data
+        summoner_levels = _MATCH_FETCHER.fetch_summoner_level_data(
+            participants=participants
+        )
+        champion_picks = (
+            match_pre_features.get("team1_picks", [])
+            + match_pre_features.get("team2_picks", [])
+        )
         champion_masteries = _MATCH_FETCHER.fetch_champion_mastery_data(
             participants=participants, champion_picks=champion_picks
         )
-        
-        champion_total_mastery_scores = _MATCH_FETCHER.fetch_total_mastery_score(participants=participants)
-        rank_queue_data = _MATCH_FETCHER.fetch_rank_queue_data(participants=participants)
-        
-        # For live games, fetch recent KPIs (not historical before game)
+        champion_total_mastery_scores = _MATCH_FETCHER.fetch_total_mastery_score(
+            participants=participants
+        )
+        rank_queue_data = _MATCH_FETCHER.fetch_rank_queue_data(
+            participants=participants
+        )
+
         kpi_limit = int(os.getenv("PREDICT_KPI_LIMIT", "10"))
         kpis_data = _MATCH_FETCHER.fetch_raw_player_kpis(
             participants=participants,
             match_limit_per_player=kpi_limit,
-            before_timestamp=None,  # Use recent games, not historical
+            before_timestamp=None,
         )
-        
-        # Create match record
+
+        # Create match and player records
         match_id = match_pre_features.get("match_id")
-        match_record = _MATCH_FETCHER.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
-        
-        # Create player history records
+        match_record = _MATCH_FETCHER.create_match_record(
+            match_id=match_id, match_pre_features=match_pre_features
+        )
+
         player_history_records = []
-        for puuid in participants:
-            team_id = 100 if puuid in match_pre_features.get("team1_participants") else 200
-            role = (
-                match_pre_features.get("team1_roles")[match_pre_features.get("team1_participants").index(puuid)]
+        for i, puuid in enumerate(participants):
+            team_id = 100 if i < 5 else 200
+            role_list = (
+                match_pre_features.get("team1_roles", [])
                 if team_id == 100
-                else match_pre_features.get("team2_roles")[match_pre_features.get("team2_participants").index(puuid)]
+                else match_pre_features.get("team2_roles", [])
             )
-            champion_id = (
-                match_pre_features.get("team1_picks")[match_pre_features.get("team1_participants").index(puuid)]
+            pick_list = (
+                match_pre_features.get("team1_picks", [])
                 if team_id == 100
-                else match_pre_features.get("team2_picks")[match_pre_features.get("team2_participants").index(puuid)]
+                else match_pre_features.get("team2_picks", [])
             )
+            role = role_list[i % 5] if role_list else "unknown"
+            champion_id = pick_list[i % 5] if pick_list else 0
+
             player_history_record = _MATCH_FETCHER.create_player_history_record(
                 match_id=match_id,
                 puuid=puuid,
@@ -939,115 +777,139 @@ async def check_live_game(req: LiveGameRequest):
                 champion_id=champion_id,
                 summoner_level=summoner_levels.get(puuid),
                 champion_mastery=champion_masteries.get(puuid),
-                champion_total_mastery_score=champion_total_mastery_scores.get(puuid),
+                champion_total_mastery_score=champion_total_mastery_scores.get(
+                    puuid
+                ),
                 rank_queue_data=rank_queue_data,
                 kpis_data=kpis_data.get(puuid),
             )
             player_history_records.append(player_history_record)
-        
-        # Create DataFrames and process
+
+        # Process data
         match_df = pd.DataFrame([match_record])
         player_history_df = pd.DataFrame(player_history_records)
-        
-        # Create temporary DataHandler
+
         temp_handler = DataHandler(
-            logger=_LOGGER,
+            logger=logger,
             parquet_handler=_PARQUET_HANDLER,
             target_feature="team1_win",
             random_state=_RANDOM_SEED,
             master_registry=None,
         )
-        
-        # Join match and player data
+
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmpdir:
             match_tmp = os.path.join(tmpdir, "match.parquet")
             player_tmp = os.path.join(tmpdir, "player.parquet")
             _PARQUET_HANDLER.write_parquet(match_df, match_tmp)
             _PARQUET_HANDLER.write_parquet(player_history_df, player_tmp)
-            temp_handler.join_match_and_player_data(match_parquet_path=match_tmp, player_parquet_path=player_tmp)
-        
+            temp_handler.join_match_and_player_data(
+                match_parquet_path=match_tmp, player_parquet_path=player_tmp
+            )
+
         combined_df = temp_handler.get_combined_dataframe()
-        
-        # Generate features
+
         try:
             X = _FEATURE_ENGINEER.generate_new_features(combined_df.copy())
         except Exception:
             X = combined_df.copy()
-        
-        # Drop non-feature columns
-        drop_cols = [col for col in ["team1_win", "match_id", "game_version"] if col in X.columns]
+
+        drop_cols = [
+            col
+            for col in ["team1_win", "match_id", "game_version"]
+            if col in X.columns
+        ]
         if drop_cols:
             X = X.drop(columns=drop_cols)
-        
-        # Apply preprocessor
-        if _PREPROCESSOR is not None:
+
+        if model_loader.preprocessor is not None:
             try:
-                X_pre = _PREPROCESSOR.transform(X if isinstance(X, pd.DataFrame) else pd.DataFrame(X))
-            except Exception as e:
-                _LOGGER.error(f"Preprocessor transform failed: {e}")
+                X_pre = model_loader.preprocessor.transform(
+                    X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+                )
+            except Exception:
                 X_pre = X
         else:
             X_pre = X
-        
-        # Align features if needed
-        if _FEATURE_NAMES:
+
+        if model_loader.feature_names:
             if isinstance(X_pre, pd.DataFrame):
-                X_pre = X_pre.reindex(columns=_FEATURE_NAMES, fill_value=0.0)
+                X_pre = X_pre.reindex(
+                    columns=model_loader.feature_names, fill_value=0.0
+                )
                 x = X_pre.values.astype(np.float32)
             else:
                 x = X_pre
         else:
             x = X_pre.values if isinstance(X_pre, pd.DataFrame) else X_pre
-        
-        # Predict
-        if hasattr(_MODEL, "forward"):
-            import torch
-            _MODEL.eval()
-            with torch.no_grad():
-                inp = torch.FloatTensor(x).to(getattr(_MODEL, "device", "cpu"))
-                logits = _MODEL.forward(inp)
-                probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-        elif hasattr(_MODEL, "predict_proba"):
-            probs = _MODEL.predict_proba(x)[0]
-        else:
-            pred = _MODEL.predict(x)
-            probs = np.array([1.0 - pred[0], pred[0]]) if pred[0] in [0, 1] else np.array([0.5, 0.5])
-        
-        # Get probabilities
+
+        class_index, probs = model_loader.predict(x)
+
         idx_blue = 1
         idx_red = 0
-        try:
-            if hasattr(_MODEL, "classes_"):
-                classes = list(getattr(_MODEL, "classes_", []))
-                if True in classes:
-                    idx_blue = classes.index(True)
-                elif 1 in classes:
-                    idx_blue = classes.index(1)
-                if False in classes:
-                    idx_red = classes.index(False)
-                elif 0 in classes:
-                    idx_red = classes.index(0)
-        except Exception:
-            pass
-        
-        team_blue_prob = float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
+        if hasattr(model_loader.model, "classes_"):
+            classes = list(model_loader.model.classes_)
+            if True in classes:
+                idx_blue = classes.index(True)
+            elif 1 in classes:
+                idx_blue = classes.index(1)
+            if False in classes:
+                idx_red = classes.index(False)
+            elif 0 in classes:
+                idx_red = classes.index(0)
+
+        team_blue_prob = (
+            float(probs[idx_blue]) if idx_blue < len(probs) else 0.5
+        )
         team_red_prob = float(probs[idx_red]) if idx_red < len(probs) else 0.5
         predicted_winner = "red" if team_red_prob > team_blue_prob else "blue"
-        
+        confidence = max(team_red_prob, team_blue_prob)
+
+        # Create prediction ID for sharing
+        pred_data = {
+            "game_name": req.game_name,
+            "tag_line": req.tag_line,
+            "red_prob": team_red_prob,
+            "blue_prob": team_blue_prob,
+        }
+        pred_id = _create_prediction_id(pred_data)
+
+        duration_ms = (time.time() - start_time) * 1000
+        monitoring.log_prediction(
+            is_batch=False,
+            num_samples=1,
+            duration_ms=duration_ms,
+            confidence=confidence,
+        )
+
         return LiveGameResponse(
             has_active_game=True,
             game_id=match_id,
             team_red_win_probability=team_red_prob,
             team_blue_win_probability=team_blue_prob,
             predicted_winner=predicted_winner,
+            confidence=confidence,
+            share_url=_generate_share_url(pred_id),
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        _LOGGER.error(f"Live game check failed: {e}", exc_info=True)
+        monitoring.log_prediction(
+            is_batch=False,
+            num_samples=1,
+            duration_ms=(time.time() - start_time) * 1000,
+            error=str(e),
+        )
         return LiveGameResponse(
             has_active_game=False,
-            error=f"Failed to check live game: {str(e)}"
+            error=f"Failed to check live game: {str(e)}",
         )
+
+
+@app.get("/metrics", response_model=MetricsResponse)
+async def get_metrics():
+    """Get application metrics."""
+    metrics = monitoring.get_metrics()
+    return MetricsResponse(**metrics)

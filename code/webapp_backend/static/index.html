@@ -3,33 +3,88 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LoL Draft Predictor</title>
+  <title>LoL Draft Predictor v2.0</title>
   <style>
     * { box-sizing: border-box; }
+    
+    :root {
+      --bg-primary: #0b1221;
+      --bg-secondary: #0e1a2b;
+      --bg-tertiary: #161b22;
+      --border-color: #18273a;
+      --border-hover: #30363d;
+      --text-primary: #e6edf3;
+      --text-secondary: #9fb7d0;
+      --accent-blue: #58a6ff;
+      --accent-light: #79c0ff;
+      --success: #3fb950;
+      --error: #f85149;
+      --warn: #ffcc66;
+    }
+    
+    body.light-mode {
+      --bg-primary: #f6f8fa;
+      --bg-secondary: #ffffff;
+      --bg-tertiary: #f3f3f3;
+      --border-color: #d0d7de;
+      --border-hover: #b1bac4;
+      --text-primary: #24292f;
+      --text-secondary: #656d76;
+      --accent-blue: #0969da;
+      --accent-light: #1f6feb;
+      --success: #1a7f37;
+      --error: #d1242f;
+      --warn: #bf8700;
+    }
     
     body { 
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       margin: 0; 
-      background: linear-gradient(135deg, #0b1221 0%, #0e1a2b 100%);
-      color: #e6edf3;
+      background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+      color: var(--text-primary);
       min-height: 100vh;
+      transition: background 0.3s ease, color 0.3s ease;
     }
     
     header { 
       background: rgba(14, 26, 43, 0.95);
       padding: 20px 24px;
-      border-bottom: 1px solid #18273a;
+      border-bottom: 1px solid var(--border-color);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    body.light-mode header {
+      background: rgba(255, 255, 255, 0.95);
     }
     
     header h1 { 
       font-size: 24px;
       margin: 0;
       font-weight: 600;
-      background: linear-gradient(135deg, #58a6ff, #79c0ff);
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-light));
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
+    }
+    
+    .theme-toggle {
+      background: rgba(88, 166, 255, 0.1);
+      border: 1px solid var(--accent-blue);
+      color: var(--accent-blue);
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+    
+    .theme-toggle:hover {
+      background: rgba(88, 166, 255, 0.2);
+      transform: scale(1.05);
     }
     
     main { 
@@ -41,12 +96,12 @@
     h3 { 
       font-size: 16px;
       margin: 0 0 12px 0;
-      color: #79c0ff;
+      color: var(--accent-light);
     }
     
     .card { 
       background: rgba(14, 26, 43, 0.8);
-      border: 1px solid #18273a;
+      border: 1px solid var(--border-color);
       border-radius: 12px;
       padding: 20px;
       margin-bottom: 16px;
@@ -54,8 +109,12 @@
       transition: all 0.3s ease;
     }
     
+    body.light-mode .card {
+      background: rgba(255, 255, 255, 0.9);
+    }
+    
     .card:hover {
-      border-color: #30363d;
+      border-color: var(--border-hover);
       box-shadow: 0 4px 16px rgba(88, 166, 255, 0.1);
     }
     
@@ -72,7 +131,7 @@
     
     label { 
       font-size: 12px;
-      color: #9fb7d0;
+      color: var(--text-secondary);
       margin-bottom: 6px;
       font-weight: 500;
       text-transform: uppercase;
@@ -83,8 +142,8 @@
     input[type="number"],
     select { 
       background: rgba(11, 18, 33, 0.8);
-      border: 1px solid #22344d;
-      color: #e6edf3;
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
       border-radius: 6px;
       padding: 10px 12px;
       font-size: 14px;
@@ -92,13 +151,25 @@
       width: 100%;
     }
     
+    body.light-mode input[type="text"],
+    body.light-mode input[type="number"],
+    body.light-mode select {
+      background: rgba(255, 255, 255, 0.95);
+      color: var(--text-primary);
+    }
+    
     input[type="text"]:focus,
     input[type="number"]:focus,
     select:focus {
       outline: none;
-      border-color: #58a6ff;
+      border-color: var(--accent-blue);
       box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
       background: rgba(11, 18, 33, 0.95);
+    }
+    
+    body.light-mode input:focus,
+    body.light-mode select:focus {
+      background: rgba(255, 255, 255, 1);
     }
     
     .actions { 
@@ -161,10 +232,55 @@
       to { transform: rotate(360deg); }
     }
     
+    /* Confidence bar */
+    .confidence-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 12px 0;
+    }
+    
+    .confidence-bar label {
+      margin: 0;
+      min-width: 80px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    
+    .confidence-container {
+      flex: 1;
+      height: 20px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+    }
+    
+    .confidence-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent-blue), var(--accent-light));
+      width: 0%;
+      transition: width 0.5s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: white;
+      font-weight: bold;
+    }
+    
+    .confidence-text {
+      min-width: 40px;
+      text-align: right;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-light);
+    }
+    
     .result { 
       white-space: pre-wrap;
       background: rgba(11, 18, 33, 0.9);
-      border: 1px solid #22344d;
+      border: 1px solid var(--border-color);
       padding: 16px;
       border-radius: 6px;
       font-size: 14px;
@@ -174,25 +290,29 @@
       overflow-y: auto;
     }
     
+    body.light-mode .result {
+      background: rgba(243, 243, 243, 0.9);
+    }
+    
     .result.success {
-      border-color: #3fb950;
+      border-color: var(--success);
       background: rgba(63, 185, 80, 0.05);
     }
     
     .result.error {
-      border-color: #f85149;
+      border-color: var(--error);
       background: rgba(248, 81, 73, 0.05);
     }
     
     .result.loading {
-      border-color: #58a6ff;
+      border-color: var(--accent-blue);
       background: rgba(88, 166, 255, 0.05);
     }
     
-    .warn { color: #ffcc66; }
-    .error-text { color: #f85149; }
-    .success-text { color: #3fb950; }
-    .info-text { color: #79c0ff; }
+    .warn { color: var(--warn); }
+    .error-text { color: var(--error); }
+    .success-text { color: var(--success); }
+    .info-text { color: var(--accent-light); }
     
     /* Model info card */
     #modelMeta p {
@@ -207,8 +327,15 @@
         margin: 16px auto;
       }
       
+      header {
+        flex-direction: column;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      
       header h1 {
         font-size: 20px;
+        margin: 0;
       }
       
       .card {
@@ -226,6 +353,10 @@
       button {
         width: 100%;
         justify-content: center;
+      }
+      
+      .theme-toggle {
+        width: 100%;
       }
     }
     
@@ -251,7 +382,8 @@
 </head>
 <body>
   <header>
-    <h1>⚔️ LoL Draft Predictor</h1>
+    <h1>⚔️ LoL Draft Predictor v2.0</h1>
+    <button class="theme-toggle" id="themeToggle">🌙 Dark Mode</button>
   </header>
   <main>
     <div class="card" id="modelInfo">
@@ -309,10 +441,50 @@
     <div class="card">
       <h3>Prediction Result</h3>
       <div class="result" id="resultBox">No result yet. Enter a summoner name to get started.</div>
+      <div id="confidenceContainer" style="display:none">
+        <div class="confidence-bar">
+          <label>Red Team:</label>
+          <div class="confidence-container">
+            <div class="confidence-fill" id="redConfidence"></div>
+          </div>
+          <div class="confidence-text" id="redConfidenceText">0%</div>
+        </div>
+        <div class="confidence-bar">
+          <label>Blue Team:</label>
+          <div class="confidence-container">
+            <div class="confidence-fill" id="blueConfidence"></div>
+          </div>
+          <div class="confidence-text" id="blueConfidenceText">0%</div>
+        </div>
+      </div>
     </div>
   </main>
 
   <script>
+    // Theme toggle
+    const themeToggle = document.getElementById('themeToggle');
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    
+    function setTheme(theme) {
+      if (theme === 'light') {
+        document.body.classList.add('light-mode');
+        themeToggle.textContent = '☀️ Light Mode';
+      } else {
+        document.body.classList.remove('light-mode');
+        themeToggle.textContent = '🌙 Dark Mode';
+      }
+      localStorage.setItem('theme', theme);
+    }
+    
+    setTheme(savedTheme);
+    
+    themeToggle.addEventListener('click', () => {
+      const currentTheme = document.body.classList.contains('light-mode') ? 'light' : 'dark';
+      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+      setTheme(newTheme);
+    });
+
+    // Prediction logic
     const resultBox = document.getElementById('resultBox');
     const gameName = document.getElementById('gameName');
     const tagLine = document.getElementById('tagLine');
@@ -321,6 +493,7 @@
     const clearBtn = document.getElementById('clearBtn');
     const btnIcon = document.getElementById('btnIcon');
     const btnText = document.getElementById('btnText');
+    const confidenceContainer = document.getElementById('confidenceContainer');
 
     async function fetchModelInfo() {
       try {
@@ -339,6 +512,18 @@
       }
     }
 
+    function updateConfidenceBars(redProb, blueProb) {
+      const redPct = Math.round(redProb * 100);
+      const bluePct = Math.round(blueProb * 100);
+      
+      document.getElementById('redConfidence').style.width = redPct + '%';
+      document.getElementById('redConfidenceText').textContent = redPct + '%';
+      document.getElementById('blueConfidence').style.width = bluePct + '%';
+      document.getElementById('blueConfidenceText').textContent = bluePct + '%';
+      
+      confidenceContainer.style.display = 'block';
+    }
+
     async function predict() {
       const name = gameName.value.trim();
       const tag = tagLine.value.trim();
@@ -346,6 +531,7 @@
       if (!name || !tag) {
         resultBox.className = 'result error';
         resultBox.textContent = '❌ Error: Please enter both summoner name and tag line.';
+        confidenceContainer.style.display = 'none';
         return;
       }
 
@@ -355,6 +541,7 @@
       btnText.textContent = 'Checking for active game...';
       resultBox.className = 'result loading';
       resultBox.textContent = '⏳ Checking for active game... (this may take 10-30 seconds)';
+      confidenceContainer.style.display = 'none';
       
       try {
         const r = await fetch('/check-live-game', {
@@ -388,6 +575,7 @@ ${result.error || 'This summoner is not currently in a live game.'}
 
 <span class="info-text">💡 Tip: We only predict active games during champion select or while the game is in progress. Completed games cannot be predicted.</span>
           `.trim();
+          confidenceContainer.style.display = 'none';
           predictBtn.disabled = false;
           btnIcon.textContent = '🔍';
           btnText.textContent = 'Check Live Game & Predict';
@@ -396,6 +584,7 @@ ${result.error || 'This summoner is not currently in a live game.'}
         
         const redPct = (result.team_red_win_probability * 100).toFixed(1);
         const bluePct = (result.team_blue_win_probability * 100).toFixed(1);
+        const confidence = ((result.confidence || Math.max(result.team_red_win_probability, result.team_blue_win_probability)) * 100).toFixed(1);
         const winner = result.predicted_winner.toUpperCase();
         const winnerIcon = winner === 'RED' ? '🔴' : '🔵';
         
@@ -409,7 +598,10 @@ ${result.error || 'This summoner is not currently in a live game.'}
 <strong class="success-text">🔵 Team Blue Win Probability:</strong> <strong>${bluePct}%</strong>
 
 <strong>Predicted Winner:</strong> <span style="color: ${winner === 'RED' ? '#f85149' : '#3fb950'}; font-size: 18px;">${winnerIcon} ${winner}</span>
+<strong style="color: var(--accent-light);">Confidence: ${confidence}%</strong>
         `.trim();
+        
+        updateConfidenceBars(result.team_red_win_probability, result.team_blue_win_probability);
       } catch (e) {
         resultBox.className = 'result error';
         resultBox.textContent = `❌ Request failed: ${e.message}`;
@@ -426,6 +618,7 @@ ${result.error || 'This summoner is not currently in a live game.'}
       region.value = 'euw1';
       resultBox.className = 'result';
       resultBox.textContent = 'No result yet. Enter a summoner name to get started.';
+      confidenceContainer.style.display = 'none';
       gameName.focus();
     }
 
