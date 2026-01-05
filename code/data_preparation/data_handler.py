@@ -8,8 +8,6 @@ from helpers.master_data_registry import MasterDataRegistry
 from helpers.parquet_handler import ParquetHandler
 from sklearn.model_selection import train_test_split
 
-# glob is currently unused; remove if not needed
-
 # Constants to avoid duplicated literals
 _ERR_NO_DF = "No dataframe loaded. Call load_data or join_match_and_player_data first."
 _FILE_TRAIN_DATA = "data_train.parquet"

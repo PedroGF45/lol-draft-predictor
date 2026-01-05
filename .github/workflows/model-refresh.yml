@@ -32,6 +32,13 @@ jobs:
           pip install huggingface_hub python-dotenv
           pip install -r code/webapp_backend/requirements.txt
 
+      - name: Pull dataset from Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO_ID: ${{ secrets.HF_DATASET_REPO_ID }}
+        run: |
+          python code/data_sync.py --action pull --local-dir data
+
       - name: Cache data artifacts
         uses: actions/cache@v4
         with:
@@ -45,10 +52,13 @@ jobs:
       - name: Create .env file
         run: |
           echo "RIOT_API_KEY=${{ secrets.RIOT_API_KEY }}" >> .env
-          echo "RAW_DATA_PATH=./data/raw" >> .env
+          echo "RAW_DATA_PATH=./data" >> .env
+          echo "EXPLORATION_DATA_PATH=./data/exploration" >> .env
+          echo "PREPROCESSED_DATA_PATH=./data/preprocessed" >> .env
           echo "CLEANED_DATA_PATH=./data/cleaned" >> .env
           echo "FEATURE_ENGINEER_DATA_PATH=./data/feature_engineered" >> .env
           echo "MODELS_PATH=./models" >> .env
+          echo "HF_DATASET_LOCAL_DIR=./data" >> .env
 
       - name: Check for existing cleaned data
         id: check_data
@@ -90,6 +100,14 @@ jobs:
             --repo-id PedroGF45/lol-draft-predictor \
             --models-path ../models \
             --commit-message "CI: Auto-update models ($(date +'%Y-%m-%d %H:%M UTC'))"
+
+      - name: Push dataset to Hugging Face
+        if: steps.check_data.outputs.has_data == 'true'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO_ID: ${{ secrets.HF_DATASET_REPO_ID }}
+        run: |
+          python code/data_sync.py --action push --local-dir data --commit-message "CI: sync dataset ${{ github.sha }}"
 
       - name: Trigger Render Deploy
         if: steps.verify_models.outputs.has_models == 'true'
