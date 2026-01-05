@@ -1,7 +1,11 @@
 import argparse
 import logging
+import sys
 from pathlib import Path
 from typing import List
+
+# Add parent directory to path to import helpers
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from helpers.hf_data_repo import download_dataset_repo, upload_paths
 
