@@ -44,6 +44,7 @@ except Exception:
     DeepLearningClassifier = None  # type: ignore
 
 import logging
+
 from data_extraction.data_miner import DataMiner
 from data_extraction.match_fetcher import MatchFetcher
 from data_extraction.requester import Requester

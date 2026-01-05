@@ -32,7 +32,7 @@ from typing import List
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from helpers.hf_data_repo import download_dataset_repo, upload_paths, clear_and_recreate_repo
+from helpers.hf_data_repo import clear_and_recreate_repo, download_dataset_repo, upload_paths
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("data_sync")

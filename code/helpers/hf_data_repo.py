@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 try:
-    from huggingface_hub import HfApi, create_repo, snapshot_download, delete_repo
+    from huggingface_hub import HfApi, create_repo, delete_repo, snapshot_download
 except ImportError as e:  # pragma: no cover - dependency handled by workflows
     raise ImportError(
         "huggingface_hub is required for dataset syncing. Install with `pip install huggingface_hub`.\nOriginal error: "
