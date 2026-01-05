@@ -180,6 +180,75 @@ class MetricsResponse(BaseModel):
 
 
 # ============================================================================
+# Region Management
+# ============================================================================
+
+# Region to cluster mapping
+REGION_CLUSTER_MAP = {
+    # Europe
+    "euw1": "europe",
+    "eun1": "europe",
+    # Americas
+    "na1": "americas",
+    "br1": "americas",
+    "la1": "americas",
+    "la2": "americas",
+    # Asia
+    "kr": "asia",
+    "jp1": "asia",
+    # SEA
+    "oc1": "sea",
+    "ph2": "sea",
+    "sg2": "sea",
+    "th2": "sea",
+    "tw2": "sea",
+    "vn2": "sea",
+}
+
+
+class RegionManager:
+    """Manages region-specific requesters with caching."""
+
+    def __init__(self, api_key: str, monitoring_service):
+        self.api_key = api_key
+        self.monitoring = monitoring_service
+        self.requesters: Dict[str, Requester] = {}  # Cache requesters per region
+
+    def get_requester(self, region: str = "euw1") -> Optional[Requester]:
+        """Get or create a requester for the given region."""
+        region = region.lower()
+
+        # Validate region
+        if region not in REGION_CLUSTER_MAP:
+            self.monitoring.warning(f"Unknown region: {region}. Available: {list(REGION_CLUSTER_MAP.keys())}")
+            return None
+
+        # Return cached requester if available
+        if region in self.requesters:
+            return self.requesters[region]
+
+        try:
+            cluster = REGION_CLUSTER_MAP[region]
+            base_url_v4 = f"https://{region}.api.riotgames.com"
+            base_url_v5 = f"https://{cluster}.api.riotgames.com"
+
+            requester = Requester(
+                logger=self.monitoring.logger,
+                base_url_v4=base_url_v4,
+                base_url_v5=base_url_v5,
+                headers={"X-Riot-Token": self.api_key},
+                timeout=10.0,
+            )
+
+            self.requesters[region] = requester
+            self.monitoring.info(f"Created requester for region: {region} (cluster: {cluster})")
+            return requester
+        except Exception as e:
+            self.monitoring.warning(f"Failed to create requester for region {region}: {e}")
+            return None
+
+
+# ============================================================================
 # Global Services
 # ============================================================================
 
@@ -188,6 +257,9 @@ monitoring = MonitoringService("lol-draft-predictor")
 cache_service = CacheService()
 rate_limit_service = RateLimitService()
 model_loader = ModelLoader()
+
+# Region manager (initialized when RIOT_API_KEY is available)
+region_manager: Optional[RegionManager] = None
 
 # Global instances for data extraction and feature engineering (lazy initialized)
 _REQUESTER: Optional[Requester] = None
@@ -243,7 +315,7 @@ async def logging_middleware(request: Request, call_next):
 
 def _init_data_extraction_services():
     """Initialize data extraction and feature engineering services lazily."""
-    global _REQUESTER, _MATCH_FETCHER, _FEATURE_ENGINEER
+    global _REQUESTER, _MATCH_FETCHER, _FEATURE_ENGINEER, region_manager
 
     if _REQUESTER is not None and _MATCH_FETCHER is not None and _FEATURE_ENGINEER is not None:
         return  # Already initialized
@@ -254,17 +326,17 @@ def _init_data_extraction_services():
             monitoring.warning("RIOT_API_KEY not set - live game features will be disabled")
             return
 
-        # Initialize Requester
-        base_url_v4 = os.getenv("RIOT_BASE_URL_V4", "https://euw1.api.riotgames.com")
-        base_url_v5 = os.getenv("RIOT_BASE_URL_V5", "https://europe.api.riotgames.com")
-
-        _REQUESTER = Requester(
-            logger=monitoring.logger,
-            base_url_v4=base_url_v4,
-            base_url_v5=base_url_v5,
-            headers={"X-Riot-Token": riot_api_key},
-            timeout=10.0,
-        )
+        # Initialize RegionManager for dynamic region support
+        region_manager = RegionManager(api_key=riot_api_key, monitoring_service=monitoring)
+        
+        # Get default requester for default region (for MatchFetcher)
+        default_region = os.getenv("RIOT_DEFAULT_REGION", "euw1")
+        _REQUESTER = region_manager.get_requester(default_region)
+        
+        if not _REQUESTER:
+            raise RuntimeError(f"Failed to create requester for default region: {default_region}")
+        
+        monitoring.info(f"RegionManager initialized with default region: {default_region}")
 
         # Initialize ParquetHandler and MatchFetcher
         from helpers.parquet_handler import ParquetHandler
@@ -676,15 +748,37 @@ async def check_live_game(req: LiveGameRequest):
     start_time = time.time()
 
     try:
-        monitoring.info(f"Checking live game for {req.game_name}#{req.tag_line}")
+        monitoring.info(f"Checking live game for {req.game_name}#{req.tag_line} in region {req.region}")
 
-        # DataMiner is optional - MatchFetcher will use requester directly if None
-        match_pre_features = _MATCH_FETCHER.fetch_active_game_pre_features(req.game_name, req.tag_line, data_miner=None)
+        # Get region-specific requester
+        region_requester = region_manager.get_requester(req.region) if region_manager else None
+        
+        if not region_requester:
+            return LiveGameResponse(
+                has_active_game=False,
+                error=f"Unsupported region: {req.region}. Supported: {', '.join(REGION_CLUSTER_MAP.keys())}",
+            )
+
+        # Create a temporary MatchFetcher with the region-specific requester
+        from helpers.parquet_handler import ParquetHandler
+        
+        temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
+        temp_match_fetcher = MatchFetcher(
+            requester=region_requester,
+            logger=monitoring.logger,
+            parquet_handler=temp_parquet_handler,
+            dataframe_target_path=os.path.join(REPO_ROOT, "data"),
+        )
+        
+        # Fetch live game with region-specific requester
+        match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
+            req.game_name, req.tag_line, data_miner=None
+        )
 
         if not match_pre_features:
             return LiveGameResponse(
                 has_active_game=False,
-                error="No active game found.",
+                error="No active game found or player not in this region.",
             )
 
         # Process similar to completed match
@@ -694,17 +788,17 @@ async def check_live_game(req: LiveGameRequest):
 
         monitoring.info(f"Live game found with {len(participants)} participants")
 
-        # Fetch player data
-        summoner_levels = _MATCH_FETCHER.fetch_summoner_level_data(participants=participants)
+        # Fetch player data using region-specific fetcher
+        summoner_levels = temp_match_fetcher.fetch_summoner_level_data(participants=participants)
         champion_picks = match_pre_features.get("team1_picks", []) + match_pre_features.get("team2_picks", [])
-        champion_masteries = _MATCH_FETCHER.fetch_champion_mastery_data(
+        champion_masteries = temp_match_fetcher.fetch_champion_mastery_data(
             participants=participants, champion_picks=champion_picks
         )
-        champion_total_mastery_scores = _MATCH_FETCHER.fetch_total_mastery_score(participants=participants)
-        rank_queue_data = _MATCH_FETCHER.fetch_rank_queue_data(participants=participants)
+        champion_total_mastery_scores = temp_match_fetcher.fetch_total_mastery_score(participants=participants)
+        rank_queue_data = temp_match_fetcher.fetch_rank_queue_data(participants=participants)
 
         kpi_limit = int(os.getenv("PREDICT_KPI_LIMIT", "10"))
-        kpis_data = _MATCH_FETCHER.fetch_raw_player_kpis(
+        kpis_data = temp_match_fetcher.fetch_raw_player_kpis(
             participants=participants,
             match_limit_per_player=kpi_limit,
             before_timestamp=None,
@@ -712,7 +806,7 @@ async def check_live_game(req: LiveGameRequest):
 
         # Create match and player records
         match_id = match_pre_features.get("match_id")
-        match_record = _MATCH_FETCHER.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
+        match_record = temp_match_fetcher.create_match_record(match_id=match_id, match_pre_features=match_pre_features)
 
         player_history_records = []
         for i, puuid in enumerate(participants):
@@ -730,7 +824,7 @@ async def check_live_game(req: LiveGameRequest):
             role = role_list[i % 5] if role_list else "unknown"
             champion_id = pick_list[i % 5] if pick_list else 0
 
-            player_history_record = _MATCH_FETCHER.create_player_history_record(
+            player_history_record = temp_match_fetcher.create_player_history_record(
                 match_id=match_id,
                 puuid=puuid,
                 team_id=team_id,
