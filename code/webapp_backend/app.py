@@ -32,7 +32,9 @@ except Exception:
 
 import logging
 
+from data_preparation.data_handler import DataHandler
 from helpers.master_data_registry import MasterDataRegistry
+from helpers.parquet_handler import ParquetHandler
 
 # Import new modular services
 from services.cache_service import CacheService
@@ -299,6 +301,10 @@ monitoring = MonitoringService("lol-draft-predictor")
 cache_service = CacheService()
 rate_limit_service = RateLimitService()
 model_loader = ModelLoader()
+
+# Shared utilities
+_PARQUET_HANDLER = ParquetHandler(logger=monitoring.logger)
+_RANDOM_SEED = int(os.getenv("RANDOM_SEED", "42"))
 
 # Region manager (initialized when RIOT_API_KEY is available)
 region_manager: Optional[RegionManager] = None
