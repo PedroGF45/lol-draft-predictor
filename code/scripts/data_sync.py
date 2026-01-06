@@ -6,6 +6,7 @@ from typing import List
 
 try:
     from dotenv import load_dotenv
+
     # Load .env from repo root
     load_dotenv(Path(__file__).parent.parent.parent / ".env")
 except ImportError:

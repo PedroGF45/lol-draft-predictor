@@ -224,7 +224,11 @@ class ModelLoader:
         models_path = self.get_models_path()
 
         # If best_overall.json provided a run_dir/model_path, use it
-        model_dir = os.path.join(models_path, preferred_run_dir) if preferred_run_dir else os.path.join(models_path, model_bucket)
+        model_dir = (
+            os.path.join(models_path, preferred_run_dir)
+            if preferred_run_dir
+            else os.path.join(models_path, model_bucket)
+        )
 
         if preferred_model_path:
             model_path = os.path.join(models_path, preferred_model_path)
