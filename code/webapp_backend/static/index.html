@@ -1,650 +1,548 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LoL Draft Predictor v2.0</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LoL Draft Predictor</title>
   <style>
-    * { box-sizing: border-box; }
-    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
     :root {
-      --bg-primary: #0b1221;
-      --bg-secondary: #0e1a2b;
-      --bg-tertiary: #161b22;
-      --border-color: #18273a;
-      --border-hover: #30363d;
-      --text-primary: #e6edf3;
-      --text-secondary: #9fb7d0;
-      --accent-blue: #58a6ff;
-      --accent-light: #79c0ff;
-      --success: #3fb950;
-      --error: #f85149;
-      --warn: #ffcc66;
+      --bg-primary: #0a0e27;
+      --bg-card: #131829;
+      --bg-input: #1a1f3a;
+      --border: rgba(255, 255, 255, 0.08);
+      --text-primary: #e4e7eb;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --accent-glow: rgba(59, 130, 246, 0.15);
+      --success: #10b981;
+      --error: #ef4444;
+      --red-team: #dc2626;
+      --blue-team: #3b82f6;
+      --shadow: rgba(0, 0, 0, 0.3);
     }
-    
-    body.light-mode {
-      --bg-primary: #f6f8fa;
-      --bg-secondary: #ffffff;
-      --bg-tertiary: #f3f3f3;
-      --border-color: #d0d7de;
-      --border-hover: #b1bac4;
-      --text-primary: #24292f;
-      --text-secondary: #656d76;
-      --accent-blue: #0969da;
-      --accent-light: #1f6feb;
-      --success: #1a7f37;
-      --error: #d1242f;
-      --warn: #bf8700;
-    }
-    
-    body { 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      margin: 0; 
-      background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #0a0e27 0%, #131829 100%);
       color: var(--text-primary);
       min-height: 100vh;
-      transition: background 0.3s ease, color 0.3s ease;
+      line-height: 1.6;
     }
-    
-    header { 
-      background: rgba(14, 26, 43, 0.95);
-      padding: 20px 24px;
-      border-bottom: 1px solid var(--border-color);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+
+    .container {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 32px 20px;
     }
-    
-    body.light-mode header {
-      background: rgba(255, 255, 255, 0.95);
+
+    header {
+      text-align: center;
+      margin-bottom: 48px;
     }
-    
-    header h1 { 
-      font-size: 24px;
-      margin: 0;
-      font-weight: 600;
-      background: linear-gradient(135deg, var(--accent-blue), var(--accent-light));
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #60a5fa, #3b82f6, #2563eb);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
+      margin-bottom: 8px;
+      letter-spacing: -0.5px;
     }
-    
-    .theme-toggle {
-      background: rgba(88, 166, 255, 0.1);
-      border: 1px solid var(--accent-blue);
-      color: var(--accent-blue);
-      padding: 8px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: 500;
-      transition: all 0.2s ease;
-    }
-    
-    .theme-toggle:hover {
-      background: rgba(88, 166, 255, 0.2);
-      transform: scale(1.05);
-    }
-    
-    main { 
-      max-width: 900px;
-      margin: 24px auto;
-      padding: 0 16px;
-    }
-    
-    h3 { 
-      font-size: 16px;
-      margin: 0 0 12px 0;
-      color: var(--accent-light);
-    }
-    
-    .card { 
-      background: rgba(14, 26, 43, 0.8);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 16px;
-      backdrop-filter: blur(10px);
-      transition: all 0.3s ease;
-    }
-    
-    body.light-mode .card {
-      background: rgba(255, 255, 255, 0.9);
-    }
-    
-    .card:hover {
-      border-color: var(--border-hover);
-      box-shadow: 0 4px 16px rgba(88, 166, 255, 0.1);
-    }
-    
-    .row { 
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 12px;
-    }
-    
-    .field { 
-      display: flex;
-      flex-direction: column;
-    }
-    
-    label { 
-      font-size: 12px;
+
+    .subtitle {
       color: var(--text-secondary);
-      margin-bottom: 6px;
+      font-size: 1rem;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 20px;
+      backdrop-filter: blur(20px);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.12);
+      box-shadow: 0 8px 32px var(--shadow);
+      transform: translateY(-2px);
+    }
+
+    .model-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent-glow);
+      border: 1px solid var(--accent);
+      border-radius: 100px;
+      padding: 6px 16px;
+      font-size: 0.875rem;
       font-weight: 500;
+      color: var(--accent);
+    }
+
+    .model-badge.ready {
+      background: rgba(16, 185, 129, 0.1);
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    .pulse {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
-    
-    input[type="text"],
-    input[type="number"],
-    select { 
-      background: rgba(11, 18, 33, 0.8);
-      border: 1px solid var(--border-color);
-      color: var(--text-primary);
-      border-radius: 6px;
-      padding: 10px 12px;
-      font-size: 14px;
-      transition: all 0.2s ease;
+
+    input, select {
       width: 100%;
-    }
-    
-    body.light-mode input[type="text"],
-    body.light-mode input[type="number"],
-    body.light-mode select {
-      background: rgba(255, 255, 255, 0.95);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 1rem;
       color: var(--text-primary);
-    }
-    
-    input[type="text"]:focus,
-    input[type="number"]:focus,
-    select:focus {
+      transition: all 0.2s;
       outline: none;
-      border-color: var(--accent-blue);
-      box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
-      background: rgba(11, 18, 33, 0.95);
     }
-    
-    body.light-mode input:focus,
-    body.light-mode select:focus {
-      background: rgba(255, 255, 255, 1);
+
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
     }
-    
-    .actions { 
-      display: flex;
-      gap: 8px;
-      margin-top: 16px;
-      flex-wrap: wrap;
+
+    input::placeholder {
+      color: var(--text-muted);
     }
-    
-    button { 
-      background: linear-gradient(135deg, #347d39, #2d6a2f);
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    button {
+      width: 100%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-hover));
       border: none;
+      border-radius: 8px;
+      padding: 14px 24px;
+      font-size: 1rem;
+      font-weight: 600;
       color: white;
-      padding: 10px 20px;
-      border-radius: 6px;
       cursor: pointer;
-      font-weight: 500;
-      font-size: 14px;
-      transition: all 0.2s ease;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    
-    button:hover:not(:disabled) {
-      background: linear-gradient(135deg, #3d8f47, #347d39);
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(52, 125, 57, 0.3);
-    }
-    
-    button:active:not(:disabled) {
-      transform: translateY(0);
-    }
-    
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-    
-    button.secondary { 
-      background: linear-gradient(135deg, #134579, #0d3454);
-    }
-    
-    button.secondary:hover:not(:disabled) {
-      background: linear-gradient(135deg, #1a5a8c, #134579);
-    }
-    
-    /* Loading spinner */
-    .spinner {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      border: 2px solid rgba(88, 166, 255, 0.3);
-      border-top: 2px solid #58a6ff;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    
-    /* Confidence bar */
-    .confidence-bar {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 12px 0;
-    }
-    
-    .confidence-bar label {
-      margin: 0;
-      min-width: 80px;
-      font-size: 13px;
-      color: var(--text-secondary);
-    }
-    
-    .confidence-container {
-      flex: 1;
-      height: 20px;
-      background: rgba(0, 0, 0, 0.2);
-      border-radius: 4px;
-      overflow: hidden;
-      border: 1px solid var(--border-color);
-    }
-    
-    .confidence-fill {
-      height: 100%;
-      background: linear-gradient(90deg, var(--accent-blue), var(--accent-light));
-      width: 0%;
-      transition: width 0.5s ease;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 11px;
-      color: white;
-      font-weight: bold;
+      gap: 8px;
     }
-    
-    .confidence-text {
-      min-width: 40px;
-      text-align: right;
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--accent-light);
+
+    button:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(59, 130, 246, 0.35);
     }
-    
-    .result { 
-      white-space: pre-wrap;
-      background: rgba(11, 18, 33, 0.9);
-      border: 1px solid var(--border-color);
-      padding: 16px;
-      border-radius: 6px;
-      font-size: 14px;
-      line-height: 1.6;
-      font-family: 'Courier New', monospace;
-      max-height: 400px;
-      overflow-y: auto;
+
+    button:active:not(:disabled) {
+      transform: translateY(0);
     }
-    
-    body.light-mode .result {
-      background: rgba(243, 243, 243, 0.9);
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
-    
-    .result.success {
+
+    button.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    button.secondary:hover:not(:disabled) {
+      background: var(--bg-input);
+      border-color: rgba(255, 255, 255, 0.2);
+      box-shadow: none;
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .result-container {
+      margin-top: 24px;
+    }
+
+    .result-box {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      min-height: 120px;
+      font-size: 0.95rem;
+      line-height: 1.7;
+    }
+
+    .result-box.loading {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.05);
+    }
+
+    .result-box.success {
       border-color: var(--success);
-      background: rgba(63, 185, 80, 0.05);
+      background: rgba(16, 185, 129, 0.05);
     }
-    
-    .result.error {
+
+    .result-box.error {
       border-color: var(--error);
-      background: rgba(248, 81, 73, 0.05);
+      background: rgba(239, 68, 68, 0.05);
     }
-    
-    .result.loading {
-      border-color: var(--accent-blue);
-      background: rgba(88, 166, 255, 0.05);
+
+    .prediction-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
     }
-    
-    .warn { color: var(--warn); }
-    .error-text { color: var(--error); }
-    .success-text { color: var(--success); }
-    .info-text { color: var(--accent-light); }
-    
-    /* Model info card */
-    #modelMeta p {
-      margin: 8px 0;
-      font-size: 14px;
+
+    .prediction-icon {
+      font-size: 2rem;
     }
-    
-    /* Responsive design */
-    @media (max-width: 600px) {
-      main {
-        padding: 0 12px;
-        margin: 16px auto;
+
+    .prediction-title {
+      font-size: 1.125rem;
+      font-weight: 600;
+    }
+
+    .team-prediction {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px;
+      background: var(--bg-primary);
+      border-radius: 8px;
+      margin-bottom: 12px;
+      transition: all 0.2s;
+    }
+
+    .team-prediction:hover {
+      background: var(--bg-input);
+    }
+
+    .team-prediction.winner {
+      border: 1px solid currentColor;
+      box-shadow: 0 4px 16px currentColor;
+    }
+
+    .team-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .team-icon {
+      font-size: 1.5rem;
+    }
+
+    .team-label {
+      font-weight: 600;
+      font-size: 1rem;
+    }
+
+    .team-probability {
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .confidence-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent-glow);
+      border-radius: 100px;
+      padding: 8px 16px;
+      margin-top: 12px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 32px 20px;
+      color: var(--text-muted);
+    }
+
+    .empty-state-icon {
+      font-size: 3rem;
+      margin-bottom: 12px;
+      opacity: 0.5;
+    }
+
+    @media (max-width: 640px) {
+      h1 {
+        font-size: 2rem;
       }
-      
-      header {
-        flex-direction: column;
-        gap: 12px;
-        align-items: flex-start;
+
+      .container {
+        padding: 24px 16px;
       }
-      
-      header h1 {
-        font-size: 20px;
-        margin: 0;
-      }
-      
+
       .card {
-        padding: 16px;
+        padding: 20px;
       }
-      
-      .row {
+
+      .form-row {
         grid-template-columns: 1fr;
       }
-      
-      .actions {
-        flex-direction: column;
-      }
-      
-      button {
-        width: 100%;
-        justify-content: center;
-      }
-      
-      .theme-toggle {
-        width: 100%;
-      }
-    }
-    
-    /* Scrollbar styling */
-    .result::-webkit-scrollbar {
-      width: 6px;
-    }
-    
-    .result::-webkit-scrollbar-track {
-      background: rgba(22, 52, 77, 0.5);
-      border-radius: 3px;
-    }
-    
-    .result::-webkit-scrollbar-thumb {
-      background: rgba(88, 166, 255, 0.5);
-      border-radius: 3px;
-    }
-    
-    .result::-webkit-scrollbar-thumb:hover {
-      background: rgba(88, 166, 255, 0.7);
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1>⚔️ LoL Draft Predictor v2.0</h1>
-    <button class="theme-toggle" id="themeToggle">🌙 Dark Mode</button>
-  </header>
-  <main>
-    <div class="card" id="modelInfo">
-      <div id="modelStatus">Loading model info…</div>
-      <div id="modelMeta" style="display:none">
-        <p><strong>Model:</strong> <span id="modelName"></span></p>
-        <p><strong>Accuracy:</strong> <span id="modelAccuracy"></span></p>
-        <p><strong>Status:</strong> <span id="gpuStatus" class="warn">Ready</span></p>
+  <div class="container">
+    <header>
+      <h1>⚔️ Draft Predictor</h1>
+      <p class="subtitle">AI-powered League of Legends outcome prediction</p>
+    </header>
+
+    <div class="card">
+      <div id="modelStatus">
+        <span class="model-badge pulse">🤖 Loading model...</span>
+      </div>
+      <div id="modelInfo" style="display: none;">
+        <span class="model-badge ready">
+          ✓ <span id="modelName"></span> • <span id="modelAccuracy"></span>
+        </span>
       </div>
     </div>
 
     <div class="card">
-      <h3>Predict Live Game Outcome</h3>
-      <p>Enter your summoner name and tag to check for an active game and predict the winner.</p>
-      <div class="row">
-        <div class="field">
-          <label for="gameName">Summoner Name</label>
-          <input type="text" id="gameName" placeholder="Unefraise" autocomplete="off" />
+      <form id="predictionForm" onsubmit="return false;">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="gameName">Summoner Name</label>
+            <input type="text" id="gameName" placeholder="Unefraise" autocomplete="off" required>
+          </div>
+          <div class="form-group">
+            <label for="tagLine">Tag</label>
+            <input type="text" id="tagLine" placeholder="KARAP" autocomplete="off" required>
+          </div>
         </div>
-        <div class="field">
-          <label for="tagLine">Tag Line</label>
-          <input type="text" id="tagLine" placeholder="KARAP" autocomplete="off" />
+
+        <div class="form-group">
+          <label for="region">Region</label>
+          <select id="region">
+            <option value="euw1">🇪🇺 Europe West</option>
+            <option value="eun1">🇪🇺 Europe Nordic & East</option>
+            <option value="na1">🇺🇸 North America</option>
+            <option value="br1">🇧🇷 Brazil</option>
+            <option value="la1">🇲🇽 Latin America North</option>
+            <option value="la2">🇦🇷 Latin America South</option>
+            <option value="kr">🇰🇷 Korea</option>
+            <option value="jp1">🇯🇵 Japan</option>
+            <option value="oc1">🇦🇺 Oceania</option>
+          </select>
         </div>
-      </div>
-      <div class="field" style="margin-top: 12px;">
-        <label for="region">Region</label>
-        <select id="region">
-          <option value="euw1">🇪🇺 EUW (Europe West)</option>
-          <option value="eun1">🇪🇺 EUNE (Europe Nordic & East)</option>
-          <option value="na1">🇺🇸 NA (North America)</option>
-          <option value="br1">🇧🇷 BR (Brazil)</option>
-          <option value="la1">🇲🇽 LAN (Latin America North)</option>
-          <option value="la2">🇦🇷 LAS (Latin America South)</option>
-          <option value="kr">🇰🇷 KR (Korea)</option>
-          <option value="jp1">🇯🇵 JP (Japan)</option>
-          <option value="ph2">🇵🇭 PH (Philippines)</option>
-          <option value="sg2">🇸🇬 SG (Singapore)</option>
-          <option value="th2">🇹🇭 TH (Thailand)</option>
-          <option value="tw2">🇹🇼 TW (Taiwan)</option>
-          <option value="vn2">🇻🇳 VN (Vietnam)</option>
-          <option value="oc1">🇦🇺 OCE (Oceania)</option>
-          <option value="tr1">🇹🇷 TR (Turkey)</option>
-          <option value="ru">🇷🇺 RU (Russia)</option>
-        </select>
-      </div>
-      <div class="actions">
-        <button id="predictBtn">
-          <span id="btnIcon">🔍</span>
-          <span id="btnText">Check Live Game & Predict</span>
-        </button>
-        <button class="secondary" id="clearBtn">Clear</button>
-      </div>
+
+        <div style="display: flex; gap: 12px; margin-top: 24px;">
+          <button type="submit" id="predictBtn">
+            <span id="btnIcon">🔮</span>
+            <span id="btnText">Predict Outcome</span>
+          </button>
+          <button type="button" class="secondary" id="clearBtn" style="width: auto; padding: 0 20px;">↻</button>
+        </div>
+      </form>
     </div>
 
     <div class="card">
-      <h3>Prediction Result</h3>
-      <div class="result" id="resultBox">No result yet. Enter a summoner name to get started.</div>
-      <div id="confidenceContainer" style="display:none">
-        <div class="confidence-bar">
-          <label>Red Team:</label>
-          <div class="confidence-container">
-            <div class="confidence-fill" id="redConfidence"></div>
+      <div class="result-container">
+        <div class="result-box" id="resultBox">
+          <div class="empty-state">
+            <div class="empty-state-icon">🎯</div>
+            <p>Enter a summoner name to predict live game outcomes</p>
           </div>
-          <div class="confidence-text" id="redConfidenceText">0%</div>
-        </div>
-        <div class="confidence-bar">
-          <label>Blue Team:</label>
-          <div class="confidence-container">
-            <div class="confidence-fill" id="blueConfidence"></div>
-          </div>
-          <div class="confidence-text" id="blueConfidenceText">0%</div>
         </div>
       </div>
     </div>
-  </main>
+  </div>
 
   <script>
-    // Theme toggle
-    const themeToggle = document.getElementById('themeToggle');
-    const savedTheme = localStorage.getItem('theme') || 'dark';
-    
-    function setTheme(theme) {
-      if (theme === 'light') {
-        document.body.classList.add('light-mode');
-        themeToggle.textContent = '☀️ Light Mode';
-      } else {
-        document.body.classList.remove('light-mode');
-        themeToggle.textContent = '🌙 Dark Mode';
-      }
-      localStorage.setItem('theme', theme);
-    }
-    
-    setTheme(savedTheme);
-    
-    themeToggle.addEventListener('click', () => {
-      const currentTheme = document.body.classList.contains('light-mode') ? 'light' : 'dark';
-      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-      setTheme(newTheme);
-    });
+    const $ = id => document.getElementById(id);
+    const modelStatus = $('modelStatus');
+    const modelInfo = $('modelInfo');
+    const modelName = $('modelName');
+    const modelAccuracy = $('modelAccuracy');
+    const predictionForm = $('predictionForm');
+    const gameName = $('gameName');
+    const tagLine = $('tagLine');
+    const region = $('region');
+    const predictBtn = $('predictBtn');
+    const clearBtn = $('clearBtn');
+    const btnIcon = $('btnIcon');
+    const btnText = $('btnText');
+    const resultBox = $('resultBox');
 
-    // Prediction logic
-    const resultBox = document.getElementById('resultBox');
-    const gameName = document.getElementById('gameName');
-    const tagLine = document.getElementById('tagLine');
-    const region = document.getElementById('region');
-    const predictBtn = document.getElementById('predictBtn');
-    const clearBtn = document.getElementById('clearBtn');
-    const btnIcon = document.getElementById('btnIcon');
-    const btnText = document.getElementById('btnText');
-    const confidenceContainer = document.getElementById('confidenceContainer');
-
-    async function fetchModelInfo() {
+    // Load model info
+    async function loadModelInfo() {
       try {
-        const r = await fetch('/model-info');
-        if (!r.ok) {
-          document.getElementById('modelStatus').textContent = 'Model not loaded yet. Train and save a best model.';
-          return;
-        }
-        const info = await r.json();
-        document.getElementById('modelStatus').style.display = 'none';
-        document.getElementById('modelMeta').style.display = 'block';
-        document.getElementById('modelName').textContent = info.model_name;
-        // Handle nested metrics structure (test_metrics.accuracy or fallback)
-        const accuracy = info.metrics?.test_metrics?.accuracy || info.metrics?.accuracy;
-        document.getElementById('modelAccuracy').textContent = accuracy 
-          ? (accuracy * 100).toFixed(2) + '%' 
-          : 'N/A';
-      } catch (e) {
-        document.getElementById('modelStatus').textContent = 'Failed to load model info';
+        const res = await fetch('/model-info');
+        if (!res.ok) throw new Error('Model not loaded');
+        
+        const data = await res.json();
+        modelStatus.style.display = 'none';
+        modelInfo.style.display = 'block';
+        modelName.textContent = data.model_name;
+        
+        const accuracy = data.metrics?.test_metrics?.accuracy || data.metrics?.accuracy;
+        modelAccuracy.textContent = accuracy ? `${(accuracy * 100).toFixed(1)}% accuracy` : 'Ready';
+      } catch (err) {
+        modelStatus.innerHTML = '<span class="model-badge" style="background: rgba(239, 68, 68, 0.1); border-color: var(--error); color: var(--error);">⚠️ Model unavailable</span>';
       }
     }
 
-    function updateConfidenceBars(redProb, blueProb) {
-      const redPct = Math.round(redProb * 100);
-      const bluePct = Math.round(blueProb * 100);
-      
-      document.getElementById('redConfidence').style.width = redPct + '%';
-      document.getElementById('redConfidenceText').textContent = redPct + '%';
-      document.getElementById('blueConfidence').style.width = bluePct + '%';
-      document.getElementById('blueConfidenceText').textContent = bluePct + '%';
-      
-      confidenceContainer.style.display = 'block';
-    }
-
+    // Predict function
     async function predict() {
       const name = gameName.value.trim();
       const tag = tagLine.value.trim();
       
-      if (!name || !tag) {
-        resultBox.className = 'result error';
-        resultBox.textContent = '❌ Error: Please enter both summoner name and tag line.';
-        confidenceContainer.style.display = 'none';
-        return;
-      }
+      if (!name || !tag) return;
 
-      // Disable button and show loading state
       predictBtn.disabled = true;
       btnIcon.className = 'spinner';
-      btnText.textContent = 'Checking for active game...';
-      resultBox.className = 'result loading';
-      resultBox.textContent = '⏳ Checking for active game... (this may take 10-30 seconds)';
-      confidenceContainer.style.display = 'none';
+      btnText.textContent = 'Analyzing...';
+      
+      resultBox.className = 'result-box loading';
+      resultBox.innerHTML = '<div class="empty-state"><div class="spinner" style="margin: 0 auto 16px;"></div><p>Checking for active game...</p></div>';
       
       try {
-        const r = await fetch('/check-live-game', {
+        const res = await fetch('/check-live-game', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            game_name: name, 
-            tag_line: tag,
-            region: region.value
-          })
+          body: JSON.stringify({ game_name: name, tag_line: tag, region: region.value })
         });
         
-        if (!r.ok) {
-          resultBox.className = 'result error';
-          const errText = await r.text();
-          resultBox.textContent = `❌ Error: ${errText}`;
-          predictBtn.disabled = false;
-          btnIcon.textContent = '🔍';
-          btnText.textContent = 'Check Live Game & Predict';
-          return;
-        }
+        const data = await res.json();
         
-        const result = await r.json();
-        
-        if (!result.has_active_game) {
-          resultBox.className = 'result error';
+        if (!data.has_active_game) {
+          resultBox.className = 'result-box error';
           resultBox.innerHTML = `
-❌ <span class="error-text">No Active Game Found</span>
-
-${result.error || 'This summoner is not currently in a live game.'}
-
-<span class="info-text">💡 Tip: We only predict active games during champion select or while the game is in progress. Completed games cannot be predicted.</span>
-          `.trim();
-          confidenceContainer.style.display = 'none';
-          predictBtn.disabled = false;
-          btnIcon.textContent = '🔍';
-          btnText.textContent = 'Check Live Game & Predict';
+            <div class="prediction-header">
+              <span class="prediction-icon">⚠️</span>
+              <span class="prediction-title">No Active Game</span>
+            </div>
+            <p style="color: var(--text-secondary);">${data.error || 'This summoner is not currently in a live game.'}</p>
+          `;
           return;
         }
         
-        const redPct = (result.team_red_win_probability * 100).toFixed(1);
-        const bluePct = (result.team_blue_win_probability * 100).toFixed(1);
-        const confidence = ((result.confidence || Math.max(result.team_red_win_probability, result.team_blue_win_probability)) * 100).toFixed(1);
-        const winner = result.predicted_winner.toUpperCase();
-        const winnerIcon = winner === 'RED' ? '🔴' : '🔵';
+        const redPct = (data.team_red_win_probability * 100).toFixed(1);
+        const bluePct = (data.team_blue_win_probability * 100).toFixed(1);
+        const winner = data.predicted_winner.toUpperCase();
+        const confidence = ((data.confidence || Math.max(data.team_red_win_probability, data.team_blue_win_probability)) * 100).toFixed(1);
         
-        resultBox.className = 'result success';
+        resultBox.className = 'result-box success';
         resultBox.innerHTML = `
-✅ <span class="success-text">Live Game Detected!</span>
-
-<strong>Game ID:</strong> ${result.game_id}
-
-<strong class="error-text">🔴 Team Red Win Probability:</strong> <strong>${redPct}%</strong>
-<strong class="success-text">🔵 Team Blue Win Probability:</strong> <strong>${bluePct}%</strong>
-
-<strong>Predicted Winner:</strong> <span style="color: ${winner === 'RED' ? '#f85149' : '#3fb950'}; font-size: 18px;">${winnerIcon} ${winner}</span>
-<strong style="color: var(--accent-light);">Confidence: ${confidence}%</strong>
-        `.trim();
-        
-        updateConfidenceBars(result.team_red_win_probability, result.team_blue_win_probability);
-      } catch (e) {
-        resultBox.className = 'result error';
-        resultBox.textContent = `❌ Request failed: ${e.message}`;
+          <div class="prediction-header">
+            <span class="prediction-icon">✨</span>
+            <span class="prediction-title">Live Game Detected</span>
+          </div>
+          
+          <div class="team-prediction ${winner === 'RED' ? 'winner' : ''}" style="color: var(--red-team);">
+            <div class="team-info">
+              <span class="team-icon">🔴</span>
+              <span class="team-label">Red Team</span>
+            </div>
+            <span class="team-probability">${redPct}%</span>
+          </div>
+          
+          <div class="team-prediction ${winner === 'BLUE' ? 'winner' : ''}" style="color: var(--blue-team);">
+            <div class="team-info">
+              <span class="team-icon">🔵</span>
+              <span class="team-label">Blue Team</span>
+            </div>
+            <span class="team-probability">${bluePct}%</span>
+          </div>
+          
+          <div style="text-align: center;">
+            <span class="confidence-badge">
+              🎯 ${confidence}% confidence
+            </span>
+          </div>
+        `;
+      } catch (err) {
+        resultBox.className = 'result-box error';
+        resultBox.innerHTML = `
+          <div class="prediction-header">
+            <span class="prediction-icon">❌</span>
+            <span class="prediction-title">Error</span>
+          </div>
+          <p style="color: var(--text-secondary);">${err.message}</p>
+        `;
       } finally {
         predictBtn.disabled = false;
-        btnIcon.textContent = '🔍';
-        btnText.textContent = 'Check Live Game & Predict';
+        btnIcon.textContent = '🔮';
+        btnText.textContent = 'Predict Outcome';
       }
     }
 
+    // Clear form
     function clearForm() {
       gameName.value = '';
       tagLine.value = '';
       region.value = 'euw1';
-      resultBox.className = 'result';
-      resultBox.textContent = 'No result yet. Enter a summoner name to get started.';
-      confidenceContainer.style.display = 'none';
+      resultBox.className = 'result-box';
+      resultBox.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎯</div><p>Enter a summoner name to predict live game outcomes</p></div>';
       gameName.focus();
     }
 
     // Event listeners
+    predictionForm.addEventListener('submit', predict);
     predictBtn.addEventListener('click', predict);
     clearBtn.addEventListener('click', clearForm);
     
-    // Allow Enter key to predict
-    gameName.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter' && !tagLine.value.trim()) {
-        tagLine.focus();
-      } else if (e.key === 'Enter') {
-        predict();
-      }
-    });
-    
-    tagLine.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') predict();
+    gameName.addEventListener('keypress', e => {
+      if (e.key === 'Enter' && !tagLine.value.trim()) tagLine.focus();
     });
 
-    // Load model info on page load
-    window.addEventListener('load', fetchModelInfo);
+    // Initialize
+    window.addEventListener('load', loadModelInfo);
   </script>
 </body>
 </html>
