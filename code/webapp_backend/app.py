@@ -807,7 +807,7 @@ async def check_live_game(req: LiveGameRequest):
                 continue
 
             active_game = region_requester.make_request(
-                is_v5=True, endpoint_url=f"/lol/spectator-v5/active-games/by-puuid/{puuid}"
+                is_v5=True, endpoint_url=f"/lol/spectator/v5/active-games/by-summoner/{puuid}"
             )
 
             # Only proceed if we got a valid game response with required fields
