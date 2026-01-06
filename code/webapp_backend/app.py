@@ -810,8 +810,9 @@ async def check_live_game(req: LiveGameRequest):
                 is_v5=True, endpoint_url=f"/lol/spectator-v5/active-games/by-puuid/{puuid}"
             )
 
-            if active_game:
-                monitoring.info(f"Found active game on region: {try_region}")
+            # Only proceed if we got a valid game response with required fields
+            if active_game and isinstance(active_game, dict) and "gameId" in active_game:
+                monitoring.info(f"Found active game on region: {try_region} with gameId: {active_game['gameId']}")
 
                 temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
                 temp_match_fetcher = MatchFetcher(
