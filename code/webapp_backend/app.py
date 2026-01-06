@@ -221,9 +221,33 @@ class RegionManager:
         self.api_key = api_key
         self.monitoring = monitoring_service
         self.requesters: Dict[str, Requester] = {}  # Cache requesters per region
+        self.cluster_requesters: Dict[str, Requester] = {}  # Cache requesters per cluster
+
+    def get_cluster_requester(self, cluster: str = "americas") -> Optional[Requester]:
+        """Get or create a requester for the given cluster (for accounts endpoint)."""
+        cluster = cluster.lower()
+
+        # Return cached requester if available
+        if cluster in self.cluster_requesters:
+            return self.cluster_requesters[cluster]
+
+        try:
+            base_url = f"https://{cluster}.api.riotgames.com"
+            requester = Requester(
+                logger=self.monitoring.logger,
+                base_url_v4=base_url,
+                base_url_v5=base_url,
+                headers={"X-Riot-Token": self.api_key},
+                timeout=10.0,
+            )
+            self.cluster_requesters[cluster] = requester
+            return requester
+        except Exception as e:
+            self.monitoring.warning(f"Failed to create cluster requester for {cluster}: {e}")
+            return None
 
     def get_requester(self, region: str = "euw1") -> Optional[Requester]:
-        """Get or create a requester for the given region."""
+        """Get or create a requester for the given region (platform-specific)."""
         region = region.lower()
 
         # Validate region
@@ -238,7 +262,9 @@ class RegionManager:
         try:
             cluster = REGION_CLUSTER_MAP[region]
             base_url_v4 = f"https://{region}.api.riotgames.com"
-            base_url_v5 = f"https://{cluster}.api.riotgames.com"
+            # For v5: accounts endpoint uses cluster routing, spectator uses region routing
+            # We'll handle this by using region for both and routing at the request level
+            base_url_v5 = f"https://{region}.api.riotgames.com"
 
             requester = Requester(
                 logger=self.monitoring.logger,
@@ -772,16 +798,17 @@ async def check_live_game(req: LiveGameRequest):
                 error="Region manager not initialized. Set RIOT_API_KEY.",
             )
 
-        # Get PUUID from the requested region
-        requested_requester = region_manager.get_requester(req.region)
+        # Get PUUID from cluster-based endpoint (accounts is global routing)
+        cluster = REGION_CLUSTER_MAP.get(req.region.lower(), "americas")
+        cluster_requester = region_manager.get_cluster_requester(cluster)
 
-        if not requested_requester:
+        if not cluster_requester:
             return LiveGameResponse(
                 has_active_game=False,
-                error=f"Unsupported region: {req.region}. Supported: {', '.join(REGION_CLUSTER_MAP.keys())}",
+                error=f"Failed to create requester for cluster: {cluster}",
             )
 
-        account = requested_requester.make_request(
+        account = cluster_requester.make_request(
             is_v5=True, endpoint_url=f"/riot/account/v1/accounts/by-riot-id/{req.game_name}/{req.tag_line}"
         )
 
@@ -802,6 +829,7 @@ async def check_live_game(req: LiveGameRequest):
         from helpers.parquet_handler import ParquetHandler
 
         for try_region in regions_to_try:
+            # Get platform-specific requester for spectator endpoint
             region_requester = region_manager.get_requester(try_region)
             if not region_requester:
                 continue
