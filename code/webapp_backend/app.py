@@ -821,7 +821,7 @@ async def check_live_game(req: LiveGameRequest):
         puuid = account["puuid"]
         monitoring.info(f"Found PUUID: {puuid} for {req.game_name}#{req.tag_line}")
 
-        # Check for active game on the requested region only
+        # Check for active game on the requested region only (spectator v5 uses puuid directly)
         match_pre_features = None
         region_requester = region_manager.get_requester(req.region)
 
@@ -849,7 +849,7 @@ async def check_live_game(req: LiveGameRequest):
                 dataframe_target_path=os.path.join(REPO_ROOT, "data"),
             )
 
-            match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(game_id=str(active_game["gameId"]))
+            match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(active_game=active_game)
         else:
             monitoring.info(f"No active game found or incomplete response for {req.game_name}#{req.tag_line}")
 
@@ -864,21 +864,22 @@ async def check_live_game(req: LiveGameRequest):
         participants = match_pre_features.get("team1_participants", []) + match_pre_features.get(
             "team2_participants", []
         )
+        real_participants = [p for p in participants if p and not str(p).startswith("anon-")]
 
         monitoring.info(f"Live game found with {len(participants)} participants")
 
         # Fetch player data using region-specific fetcher
-        summoner_levels = temp_match_fetcher.fetch_summoner_level_data(participants=participants)
+        summoner_levels = temp_match_fetcher.fetch_summoner_level_data(participants=real_participants)
         champion_picks = match_pre_features.get("team1_picks", []) + match_pre_features.get("team2_picks", [])
         champion_masteries = temp_match_fetcher.fetch_champion_mastery_data(
-            participants=participants, champion_picks=champion_picks
+            participants=real_participants, champion_picks=champion_picks
         )
-        champion_total_mastery_scores = temp_match_fetcher.fetch_total_mastery_score(participants=participants)
-        rank_queue_data = temp_match_fetcher.fetch_rank_queue_data(participants=participants)
+        champion_total_mastery_scores = temp_match_fetcher.fetch_total_mastery_score(participants=real_participants)
+        rank_queue_data = temp_match_fetcher.fetch_rank_queue_data(participants=real_participants)
 
         kpi_limit = int(os.getenv("PREDICT_KPI_LIMIT", "10"))
         kpis_data = temp_match_fetcher.fetch_raw_player_kpis(
-            participants=participants,
+            participants=real_participants,
             match_limit_per_player=kpi_limit,
             before_timestamp=None,
         )

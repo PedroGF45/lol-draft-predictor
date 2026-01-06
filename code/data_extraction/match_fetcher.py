@@ -438,54 +438,33 @@ class MatchFetcher:
         # Keep latest path for cleanup
         self.checkpoint_loading_path = checkpoint_path
 
-    def fetch_active_game_pre_features(self, game_id: str) -> Optional[dict[str, Any]]:
+    def fetch_active_game_pre_features(self, active_game: dict[str, Any]) -> Optional[dict[str, Any]]:
         """
-        Fetch draft-related features for an active/live game using V5 spectator endpoint.
+        Parse an active/live game payload (spectator v5 active-games/by-summoner) into pre-feature format.
 
         Args:
-            game_id (str): The active game ID from spectator v5 endpoint (e.g., '7672924003')
+            active_game (dict): Payload from /lol/spectator/v5/active-games/by-summoner/{puuid}
 
         Returns:
             dict[str, Any]: Live game features including bans, picks, team roles (no outcome)
                            Returns None if game data is invalid
         """
-        # Use V5 spectator-game-summary endpoint with gameId (no deprecated V4 endpoints)
-        self.logger.info(f"Fetching spectator game summary for gameId: {game_id}")
-        spectator_game = self.requester.make_request(
-            is_v5=True, endpoint_url=f"/lol/spectator/v5/spectator-game-summary/{game_id}"
-        )
-
-        if not spectator_game or not isinstance(spectator_game, dict):
-            self.logger.warning(
-                f"Failed to fetch spectator data for gameId {game_id}. "
-                f"Response was None or non-dict (possibly 403/404 from Riot API). "
-                f"Check API key permissions and ensure the game is observable."
-            )
+        if not active_game or not isinstance(active_game, dict):
+            self.logger.info("Active game payload is empty or invalid")
             return None
 
-        # Some non-200 responses return a JSON body with a status code; treat them as invalid
-        status_payload = spectator_game.get("status") if isinstance(spectator_game, dict) else None
-        if isinstance(status_payload, dict) and status_payload.get("status_code"):
-            self.logger.info(
-                "Spectator API returned error for gameId %s: %s",
-                game_id,
-                status_payload.get("message") or status_payload.get("status_code"),
-            )
-            return None
+        game_id = active_game.get("gameId")
+        self.logger.info(f"Parsing active game payload for gameId: {game_id}")
 
-        self.logger.info(f"Successfully fetched spectator game data for gameId: {game_id}")
-
-        # Parse spectator game data into match_pre_features format
-        # V5 spectator-game-summary response structure
         try:
-            game_mode = spectator_game.get("gameMode")
-            game_type = spectator_game.get("gameType")
-            queue_id = spectator_game.get("gameQueueConfigId")
-            game_start_time = spectator_game.get("gameStartTime", 0)  # Unix timestamp in ms
-            game_length = spectator_game.get("gameLength", 0)  # Seconds since game start
-            platform_id = spectator_game.get("platformId")
+            game_mode = active_game.get("gameMode")
+            game_type = active_game.get("gameType")
+            queue_id = active_game.get("gameQueueConfigId")
+            game_start_time = active_game.get("gameStartTime", 0)  # Unix timestamp in ms
+            game_length = active_game.get("gameLength", 0)  # Seconds since game start
+            platform_id = active_game.get("platformId")
 
-            participants_raw = spectator_game.get("participants") or []
+            participants_raw = active_game.get("participants") or []
             if not isinstance(participants_raw, list) or len(participants_raw) < 10:
                 self.logger.info(
                     "Invalid spectator data for gameId %s: expected 10 participants, got %s",
@@ -494,21 +473,24 @@ class MatchFetcher:
                 )
                 return None
 
-            # Filter to entries with both teamId and puuid present to avoid downstream failures
-            participants = [p for p in participants_raw if p.get("teamId") in (100, 200) and p.get("puuid")]
+            # Keep all team participants even if puuid is missing; downstream will skip API calls for placeholders
+            participants = [p for p in participants_raw if p.get("teamId") in (100, 200)]
             if len(participants) < 10:
                 self.logger.info(
-                    "Spectator data missing participant identifiers for gameId %s (got %d with puuid)",
+                    "Spectator data incomplete for gameId %s (team entries: %d)",
                     game_id,
                     len(participants),
                 )
                 return None
 
-            banned_champions = spectator_game.get("bannedChampions", []) or []
+            banned_champions = active_game.get("bannedChampions", []) or []
 
             # Sort participants by team (100=blue, 200=red)
-            team1_participants = [p["puuid"] for p in participants if p.get("teamId") == 100]
-            team2_participants = [p["puuid"] for p in participants if p.get("teamId") == 200]
+            def _participant_id(idx: int, p: dict[str, Any]) -> str:
+                return p.get("puuid") or p.get("riotId") or f"anon-{idx}"
+
+            team1_participants = [_participant_id(i, p) for i, p in enumerate(participants) if p.get("teamId") == 100]
+            team2_participants = [_participant_id(i, p) for i, p in enumerate(participants) if p.get("teamId") == 200]
 
             team1_picks = [p.get("championId", -1) for p in participants if p.get("teamId") == 100]
             team2_picks = [p.get("championId", -1) for p in participants if p.get("teamId") == 200]
@@ -710,6 +692,8 @@ class MatchFetcher:
             dict[str, Any]: Mapping of PUUID → summoner level (int).
         """
 
+        valid_participants = [p for p in participants if p and not str(p).startswith("anon-")]
+
         def _fetch_level(puuid: str) -> tuple[str, Any]:
             if puuid in self._cache_summoner_level:
                 return puuid, self._cache_summoner_level[puuid]
@@ -721,7 +705,7 @@ class MatchFetcher:
 
         summoner_levels: dict[str, Any] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(_fetch_level, puuid): puuid for puuid in participants}
+            futures = {executor.submit(_fetch_level, puuid): puuid for puuid in valid_participants}
             for future in as_completed(futures):
                 puuid, level = future.result()
                 self.logger.debug(f"Summoner PUUID: {puuid}, Level: {level}")
@@ -739,6 +723,8 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Mapping of PUUID → {lastPlayTime, championLevel, championPoints}.
         """
+
+        valid_participants = [p for p in participants if p and not str(p).startswith("anon-")]
 
         def _fetch_mastery(puuid: str, champion_id: int) -> tuple[str, dict[str, Any]]:
             cache_key = (puuid, champion_id)
@@ -758,7 +744,7 @@ class MatchFetcher:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
                 executor.submit(_fetch_mastery, puuid, champion_picks[participants.index(puuid)]): puuid
-                for puuid in participants
+                for puuid in valid_participants
             }
             for future in as_completed(futures):
                 puuid, record = future.result()
@@ -776,6 +762,8 @@ class MatchFetcher:
             dict[str, int]: Mapping of PUUID → total mastery score (int).
         """
 
+        valid_participants = [p for p in participants if p and not str(p).startswith("anon-")]
+
         def _fetch_total_score(puuid: str) -> tuple[str, int]:
             if puuid in self._cache_total_mastery:
                 return puuid, self._cache_total_mastery[puuid]
@@ -786,7 +774,7 @@ class MatchFetcher:
 
         total_mastery_scores: dict[str, int] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(_fetch_total_score, puuid): puuid for puuid in participants}
+            futures = {executor.submit(_fetch_total_score, puuid): puuid for puuid in valid_participants}
             for future in as_completed(futures):
                 puuid, score = future.result()
                 total_mastery_scores[puuid] = score
@@ -803,6 +791,8 @@ class MatchFetcher:
             dict[str, Any]: Mapping of PUUID_solo/PUUID_flex → {tier, rank, leaguePoints, wins, losses, hotStreak}.
         """
 
+        valid_participants = [p for p in participants if p and not str(p).startswith("anon-")]
+
         def _fetch_rank(puuid: str) -> tuple[str, dict[str, Any]]:
             if puuid in self._cache_rank_entries:
                 return puuid, self._cache_rank_entries[puuid]
@@ -813,7 +803,7 @@ class MatchFetcher:
 
         rank_queue_data: dict[str, Any] = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(_fetch_rank, puuid): puuid for puuid in participants}
+            futures = {executor.submit(_fetch_rank, puuid): puuid for puuid in valid_participants}
             for future in as_completed(futures):
                 puuid, rank_data = future.result()
                 if not isinstance(rank_data, list):
@@ -864,6 +854,8 @@ class MatchFetcher:
         """
         kpis_data: dict[str, Any] = {}
 
+        valid_participants = [p for p in participants if p and not str(p).startswith("anon-")]
+
         def _fetch_kpis_ids(puuid: str) -> tuple[str, list[str]]:
             if puuid in self._cache_kpis_ids:
                 return puuid, self._cache_kpis_ids[puuid]
@@ -877,7 +869,7 @@ class MatchFetcher:
 
         # Fetch KPI match IDs concurrently per participant
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures_ids = {executor.submit(_fetch_kpis_ids, puuid): puuid for puuid in participants}
+            futures_ids = {executor.submit(_fetch_kpis_ids, puuid): puuid for puuid in valid_participants}
             for future in as_completed(futures_ids):
                 puuid, kpis_match_ids = future.result()
                 if not kpis_match_ids:
