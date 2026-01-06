@@ -63,19 +63,67 @@ class ModelLoader:
             logger.error(f"HuggingFace download failed: {e}. Make sure HF_TOKEN is set for private repos")
             raise
 
-    async def load_best_model(self, model_bucket: str = "DeepLearningClassifier"):
-        """Load the best model with lazy initialization."""
+    def _resolve_model_selection(self, model_bucket: Optional[str]) -> Dict[str, Optional[str]]:
+        """
+        Resolve which model artifacts to load.
+
+        Returns a dict with keys:
+        - bucket: top-level folder under models
+        - run_dir: optional subfolder (e.g., LogisticRegression/20251222_202824)
+        - model_path: optional specific model.pkl relative to models root
+
+        Priority:
+        1) Explicit model_bucket argument (bucket only)
+        2) models/best_overall.json (uses run_dir/model_path/model_name)
+        3) Default bucket DeepLearningClassifier
+        """
+
+        if model_bucket:
+            return {"bucket": model_bucket, "run_dir": None, "model_path": None}
+
+        try:
+            best_overall_path = os.path.join(self.get_models_path(), "best_overall.json")
+            if os.path.exists(best_overall_path):
+                with open(best_overall_path) as f:
+                    best = json.load(f)
+
+                run_dir = best.get("run_dir")
+                model_path = best.get("model_path")
+                bucket = None
+
+                if run_dir:
+                    bucket = os.path.normpath(run_dir).split(os.sep)[0]
+                if not bucket and best.get("model_name"):
+                    bucket = best.get("model_name")
+
+                if bucket:
+                    logger.info(
+                        f"Auto-selected model from best_overall.json: bucket={bucket}, run_dir={run_dir or 'n/a'}"
+                    )
+                    return {"bucket": bucket, "run_dir": run_dir, "model_path": model_path}
+        except Exception as e:
+            logger.warning(f"Could not read best_overall.json, falling back to default: {e}")
+
+        return {"bucket": "DeepLearningClassifier", "run_dir": None, "model_path": None}
+
+    async def load_best_model(self, model_bucket: Optional[str] = None):
+        """Load the best model with lazy initialization (auto-resolves bucket/run_dir when not provided)."""
         if self.is_loaded or self._loading:
             return
 
         self._loading = True
         try:
+            selection = self._resolve_model_selection(model_bucket)
             use_hf = os.getenv("HF_MODEL_REPO") is not None
 
             if use_hf:
-                await self._load_from_hf(model_bucket)
+                await self._load_from_hf(selection["bucket"])
             else:
-                await self._load_from_local(model_bucket)
+                await self._load_from_local(
+                    selection["bucket"],
+                    preferred_run_dir=selection.get("run_dir"),
+                    preferred_model_path=selection.get("model_path"),
+                )
 
             # Verify model actually loaded
             if self.model is None:
@@ -83,8 +131,9 @@ class ModelLoader:
 
             self.is_loaded = True
 
-            # Provide detailed status
-            status_parts = [f"Model loaded: {self.model_name}"]
+            # Provide detailed status (helps debug bucket/best_overall selection)
+            model_class = type(self.model).__name__ if self.model else "unknown"
+            status_parts = [f"Model loaded: {self.model_name}", f"class={model_class}"]
             if self.preprocessor is None:
                 status_parts.append("WARNING: Preprocessor not loaded")
             if not self.feature_names:
@@ -165,18 +214,32 @@ class ModelLoader:
             logger.warning(f"Could not load metrics.json: {e}")
             self.test_metrics = {}
 
-    async def _load_from_local(self, model_bucket: str):
+    async def _load_from_local(
+        self,
+        model_bucket: str,
+        preferred_run_dir: Optional[str] = None,
+        preferred_model_path: Optional[str] = None,
+    ):
         """Load model from local filesystem."""
         models_path = self.get_models_path()
-        model_dir = os.path.join(models_path, model_bucket)
+
+        # If best_overall.json provided a run_dir/model_path, use it
+        model_dir = os.path.join(models_path, preferred_run_dir) if preferred_run_dir else os.path.join(models_path, model_bucket)
+
+        if preferred_model_path:
+            model_path = os.path.join(models_path, preferred_model_path)
+            base_dir = os.path.dirname(model_path)
+            info_path = os.path.join(base_dir, "info.json")
+            metrics_path = os.path.join(base_dir, "metrics.json")
+            prep_path = os.path.join(base_dir, "preprocessor.pkl")
+        else:
+            model_path = os.path.join(model_dir, "model.pkl")
+            info_path = os.path.join(model_dir, "info.json")
+            metrics_path = os.path.join(model_dir, "metrics.json")
+            prep_path = os.path.join(model_dir, "preprocessor.pkl")
 
         if not os.path.isdir(model_dir):
             raise FileNotFoundError(f"Model directory not found: {model_dir}")
-
-        model_path = os.path.join(model_dir, "model.pkl")
-        info_path = os.path.join(model_dir, "info.json")
-        metrics_path = os.path.join(model_dir, "metrics.json")
-        prep_path = os.path.join(model_dir, "preprocessor.pkl")
 
         # Load model - try joblib first, then pickle
         try:

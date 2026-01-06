@@ -6,6 +6,13 @@ import sys
 from pathlib import Path
 
 try:
+    from dotenv import load_dotenv
+    # Load .env from repo root
+    load_dotenv(Path(__file__).parent.parent.parent / ".env")
+except ImportError:
+    pass  # dotenv optional
+
+try:
     from huggingface_hub import HfApi, create_repo
 except ImportError:
     print("Error: huggingface_hub not installed. Run: pip install huggingface_hub")

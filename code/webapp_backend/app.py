@@ -431,9 +431,9 @@ async def startup_event():
     # Initialize rate limiting
     await rate_limit_service.init()
 
-    # Load model with lazy initialization
+    # Load best model (auto-resolves using best_overall.json when present)
     try:
-        await model_loader.load_best_model("DeepLearningClassifier")
+        await model_loader.load_best_model()
         monitoring.info(f"Model loaded: {model_loader.model_name}")
     except Exception as e:
         monitoring.warning(f"Model load deferred: {e}")
@@ -516,7 +516,15 @@ async def health():
 
 @app.get("/")
 async def root():
-    """Redirect to static frontend."""
+    """Redirect to static frontend when model is ready; otherwise show error page."""
+    if not model_loader.is_loaded:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Model not loaded",
+                "detail": "The service could not load the best model. Check models/best_overall.json, ensure artifacts exist, and restart.",
+            },
+        )
     return RedirectResponse(url="/static/index.html")
 
 

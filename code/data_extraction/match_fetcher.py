@@ -522,17 +522,15 @@ class MatchFetcher:
             team1_bans = team1_bans[:5]
             team2_bans = team2_bans[:5]
 
-            # For live games, we don't have role assignments from Riot
-            # We'll assign placeholder roles (can be improved with role detection logic)
-            team1_roles = ["UNKNOWN"] * len(team1_participants)
-            team2_roles = ["UNKNOWN"] * len(team2_participants)
+            # For live games, Riot does not expose per-role assignments in spectator data.
+            # Assign roles deterministically so downstream validation (requires unique 5 roles per team)
+            # does not discard the match. Smite (id 11) marks the jungler; remaining slots fill TOP/MIDDLE/BOTTOM/UTILITY.
+            team1_roles = [None] * len(team1_participants)
+            team2_roles = [None] * len(team2_participants)
 
-            # Try to infer roles from spell1Id (Smite=11 for jungle, etc.)
-            # This is a simple heuristic and not perfect
             for i, p in enumerate([p for p in participants if p.get("teamId") == 100]):
                 spell1 = p.get("spell1Id")
                 spell2 = p.get("spell2Id")
-                # Smite = jungle
                 if spell1 == 11 or spell2 == 11:
                     team1_roles[i] = "JUNGLE"
 
@@ -541,6 +539,35 @@ class MatchFetcher:
                 spell2 = p.get("spell2Id")
                 if spell1 == 11 or spell2 == 11:
                     team2_roles[i] = "JUNGLE"
+
+            def _fill_roles(roles: list[Optional[str]]) -> list[str]:
+                role_order = ["TOP", "MIDDLE", "BOTTOM", "UTILITY"]
+                filled = []
+
+                # Reserve jungle and remove it from the remaining pool if already set
+                remaining = role_order.copy()
+                for r in roles:
+                    if r and r.upper() in remaining:
+                        remaining.remove(r.upper())
+
+                for r in roles:
+                    upper_role = (r or "").upper()
+                    if upper_role == "JUNGLE":
+                        filled.append("JUNGLE")
+                    elif upper_role in ["TOP", "MIDDLE", "BOTTOM", "UTILITY"]:
+                        filled.append(upper_role)
+                    else:
+                        filled.append(remaining.pop(0) if remaining else "UTILITY")
+
+                # Ensure we still assign a jungler if none detected
+                if "JUNGLE" not in filled:
+                    replace_idx = 0
+                    filled[replace_idx] = "JUNGLE"
+
+                return filled
+
+            team1_roles = _fill_roles(team1_roles)
+            team2_roles = _fill_roles(team2_roles)
 
             return {
                 "match_id": f"LIVE_{game_id}",
