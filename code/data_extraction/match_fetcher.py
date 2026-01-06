@@ -450,12 +450,17 @@ class MatchFetcher:
                            Returns None if game data is invalid
         """
         # Use V5 spectator-game-summary endpoint with gameId (no deprecated V4 endpoints)
+        self.logger.info(f"Fetching spectator game summary for gameId: {game_id}")
         spectator_game = self.requester.make_request(
             is_v5=True, endpoint_url=f"/lol/spectator/v5/spectator-game-summary/{game_id}"
         )
 
         if not spectator_game or not isinstance(spectator_game, dict):
-            self.logger.info(f"No active game data found for gameId: {game_id}")
+            self.logger.warning(
+                f"Failed to fetch spectator data for gameId {game_id}. "
+                f"Response was None or non-dict (possibly 403/404 from Riot API). "
+                f"Check API key permissions and ensure the game is observable."
+            )
             return None
 
         # Some non-200 responses return a JSON body with a status code; treat them as invalid

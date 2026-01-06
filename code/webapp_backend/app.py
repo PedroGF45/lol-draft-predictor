@@ -850,11 +850,14 @@ async def check_live_game(req: LiveGameRequest):
             )
 
             match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(game_id=str(active_game["gameId"]))
+        else:
+            monitoring.info(f"No active game found or incomplete response for {req.game_name}#{req.tag_line}")
 
         if not match_pre_features:
             return LiveGameResponse(
                 has_active_game=False,
-                error="No active game found for this player.",
+                error="No active game found or unable to fetch spectator data. "
+                      "Verify the API key has spectator permissions.",
             )
 
         # Process similar to completed match
