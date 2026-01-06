@@ -666,7 +666,10 @@ async def predict_match(req: MatchPredictRequest):
         player_history_df = pd.DataFrame(player_history_records)
 
         # Join data
-        temp_handler = DataHandler(
+        # Ensure DataHandler is available even if module reloads differ
+        from data_preparation.data_handler import DataHandler as _DH
+
+        temp_handler = _DH(
             logger=logger,
             parquet_handler=_PARQUET_HANDLER,
             target_feature="team1_win",
@@ -928,7 +931,9 @@ async def check_live_game(req: LiveGameRequest):
         match_df = pd.DataFrame([match_record])
         player_history_df = pd.DataFrame(player_history_records)
 
-        temp_handler = DataHandler(
+        from data_preparation.data_handler import DataHandler as _DH
+
+        temp_handler = _DH(
             logger=logger,
             parquet_handler=_PARQUET_HANDLER,
             target_feature="team1_win",
