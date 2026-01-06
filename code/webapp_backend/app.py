@@ -857,7 +857,7 @@ async def check_live_game(req: LiveGameRequest):
             return LiveGameResponse(
                 has_active_game=False,
                 error="No active game found or unable to fetch spectator data. "
-                      "Verify the API key has spectator permissions.",
+                "Verify the API key has spectator permissions.",
             )
 
         # Process similar to completed match
