@@ -849,9 +849,7 @@ async def check_live_game(req: LiveGameRequest):
                 dataframe_target_path=os.path.join(REPO_ROOT, "data"),
             )
 
-            match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
-                req.game_name, req.tag_line, data_miner=None
-            )
+            match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(game_id=str(active_game["gameId"]))
 
         if not match_pre_features:
             return LiveGameResponse(

@@ -438,79 +438,41 @@ class MatchFetcher:
         # Keep latest path for cleanup
         self.checkpoint_loading_path = checkpoint_path
 
-    def fetch_active_game_pre_features(
-        self, game_name: str, tag_line: str, data_miner=None
-    ) -> Optional[dict[str, Any]]:
+    def fetch_active_game_pre_features(self, game_id: str) -> Optional[dict[str, Any]]:
         """
-        Fetch draft-related features for an active/live game by summoner name and tag.
+        Fetch draft-related features for an active/live game using V5 spectator endpoint.
 
         Args:
-            game_name (str): Summoner name (e.g., 'Unefraise')
-            tag_line (str): Tag line (e.g., 'KARAP')
-            data_miner: DataMiner instance with account lookup methods. If None, uses requester directly.
+            game_id (str): The active game ID from spectator v5 endpoint (e.g., '7672924003')
 
         Returns:
             dict[str, Any]: Live game features including bans, picks, team roles (no outcome)
-                           Returns None if no active game or data is invalid
+                           Returns None if game data is invalid
         """
-        # Step 1: Get PUUID from Riot ID
-        if data_miner:
-            account = data_miner.get_account_by_riot_id(game_name, tag_line)
-        else:
-            # Fallback: make request directly
-            account = self.requester.make_request(
-                is_v5=True, endpoint_url=f"/riot/account/v1/accounts/by-riot-id/{game_name}/{tag_line}"
-            )
+        # Use V5 spectator-game-summary endpoint with gameId (no deprecated V4 endpoints)
+        spectator_game = self.requester.make_request(
+            is_v5=True, endpoint_url=f"/lol/spectator/v5/spectator-game-summary/{game_id}"
+        )
 
-        if not account or not account.get("puuid"):
-            self.logger.info(f"Account not found for {game_name}#{tag_line}")
+        if not spectator_game:
+            self.logger.info(f"No active game data found for gameId: {game_id}")
             return None
 
-        puuid = account["puuid"]
-        self.logger.info(f"Found PUUID: {puuid} for {game_name}#{tag_line}")
+        self.logger.info(f"Successfully fetched spectator game data for gameId: {game_id}")
 
-        # Step 2: Get encrypted summoner ID from PUUID
-        if data_miner:
-            summoner = data_miner.get_summoner_by_puuid(puuid)
-        else:
-            summoner = self.requester.make_request(
-                is_v5=False, endpoint_url=f"/lol/summoner/v4/summoners/by-puuid/{puuid}"
-            )
-
-        if not summoner or not summoner.get("id"):
-            self.logger.info(f"Summoner not found for PUUID {puuid}")
-            return None
-
-        encrypted_id = summoner["id"]
-        self.logger.info(f"Found encrypted summoner ID: {encrypted_id}")
-
-        # Step 3: Get active game
-        if data_miner:
-            active_game = data_miner.get_active_game(encrypted_id)
-        else:
-            active_game = self.requester.make_request(
-                is_v5=False, endpoint_url=f"/lol/spectator/v4/active-games/by-summoner/{encrypted_id}"
-            )
-
-        if not active_game:
-            self.logger.info(f"No active game for {game_name}#{tag_line}")
-            return None
-
-        self.logger.info(f"Active game found: {active_game.get('gameId')}")
-
-        # Parse active game data into match_pre_features format
-        # Active game structure is different from completed match
+        # Parse spectator game data into match_pre_features format
+        # V5 spectator-game-summary response structure
         try:
-            game_id = active_game.get("gameId")
-            game_mode = active_game.get("gameMode")
-            game_type = active_game.get("gameType")
-            queue_id = active_game.get("gameQueueConfigId")
-            game_start_time = active_game.get("gameStartTime", 0)  # Unix timestamp in ms
-            game_length = active_game.get("gameLength", 0)  # Seconds since game start
-            platform_id = active_game.get("platformId")
+            game_id = game_id  # Use the passed gameId parameter
+            game_mode = spectator_game.get("gameMode")
+            game_type = spectator_game.get("gameType")
+            queue_id = spectator_game.get("gameQueueConfigId")
+            game_start_time = spectator_game.get("gameStartTime", 0)  # Unix timestamp in ms
+            game_length = spectator_game.get("gameLength", 0)  # Seconds since game start
+            platform_id = spectator_game.get("platformId")
 
-            participants = active_game.get("participants", [])
-            banned_champions = active_game.get("bannedChampions", [])
+            participants = spectator_game.get("participants", [])
+            banned_champions = spectator_game.get("bannedChampions", [])
 
             # Sort participants by team (100=blue, 200=red)
             team1_participants = [p["puuid"] for p in participants if p.get("teamId") == 100]
