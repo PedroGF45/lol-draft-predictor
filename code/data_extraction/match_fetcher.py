@@ -454,8 +454,18 @@ class MatchFetcher:
             is_v5=True, endpoint_url=f"/lol/spectator/v5/spectator-game-summary/{game_id}"
         )
 
-        if not spectator_game:
+        if not spectator_game or not isinstance(spectator_game, dict):
             self.logger.info(f"No active game data found for gameId: {game_id}")
+            return None
+
+        # Some non-200 responses return a JSON body with a status code; treat them as invalid
+        status_payload = spectator_game.get("status") if isinstance(spectator_game, dict) else None
+        if isinstance(status_payload, dict) and status_payload.get("status_code"):
+            self.logger.info(
+                "Spectator API returned error for gameId %s: %s",
+                game_id,
+                status_payload.get("message") or status_payload.get("status_code"),
+            )
             return None
 
         self.logger.info(f"Successfully fetched spectator game data for gameId: {game_id}")
@@ -463,7 +473,6 @@ class MatchFetcher:
         # Parse spectator game data into match_pre_features format
         # V5 spectator-game-summary response structure
         try:
-            game_id = game_id  # Use the passed gameId parameter
             game_mode = spectator_game.get("gameMode")
             game_type = spectator_game.get("gameType")
             queue_id = spectator_game.get("gameQueueConfigId")
@@ -471,19 +480,54 @@ class MatchFetcher:
             game_length = spectator_game.get("gameLength", 0)  # Seconds since game start
             platform_id = spectator_game.get("platformId")
 
-            participants = spectator_game.get("participants", [])
-            banned_champions = spectator_game.get("bannedChampions", [])
+            participants_raw = spectator_game.get("participants") or []
+            if not isinstance(participants_raw, list) or len(participants_raw) < 10:
+                self.logger.info(
+                    "Invalid spectator data for gameId %s: expected 10 participants, got %s",
+                    game_id,
+                    len(participants_raw) if isinstance(participants_raw, list) else "non-list",
+                )
+                return None
+
+            # Filter to entries with both teamId and puuid present to avoid downstream failures
+            participants = [p for p in participants_raw if p.get("teamId") in (100, 200) and p.get("puuid")]
+            if len(participants) < 10:
+                self.logger.info(
+                    "Spectator data missing participant identifiers for gameId %s (got %d with puuid)",
+                    game_id,
+                    len(participants),
+                )
+                return None
+
+            banned_champions = spectator_game.get("bannedChampions", []) or []
 
             # Sort participants by team (100=blue, 200=red)
             team1_participants = [p["puuid"] for p in participants if p.get("teamId") == 100]
             team2_participants = [p["puuid"] for p in participants if p.get("teamId") == 200]
 
-            team1_picks = [p["championId"] for p in participants if p.get("teamId") == 100]
-            team2_picks = [p["championId"] for p in participants if p.get("teamId") == 200]
+            team1_picks = [p.get("championId", -1) for p in participants if p.get("teamId") == 100]
+            team2_picks = [p.get("championId", -1) for p in participants if p.get("teamId") == 200]
+
+            # Validate we have complete team compositions
+            if (
+                len(team1_participants) != 5
+                or len(team2_participants) != 5
+                or len(team1_picks) != 5
+                or len(team2_picks) != 5
+            ):
+                self.logger.info(
+                    "Spectator data incomplete for gameId %s (team sizes: %d/%d, picks: %d/%d)",
+                    game_id,
+                    len(team1_participants),
+                    len(team2_participants),
+                    len(team1_picks),
+                    len(team2_picks),
+                )
+                return None
 
             # Extract bans by team
-            team1_bans = [b["championId"] for b in banned_champions if b.get("teamId") == 100]
-            team2_bans = [b["championId"] for b in banned_champions if b.get("teamId") == 200]
+            team1_bans = [b.get("championId", -1) for b in banned_champions if b.get("teamId") == 100]
+            team2_bans = [b.get("championId", -1) for b in banned_champions if b.get("teamId") == 200]
 
             # Pad bans to 5 (some games may have fewer)
             team1_bans += [-1] * (5 - len(team1_bans))
@@ -952,6 +996,11 @@ class MatchFetcher:
         Returns:
             dict[str, Any]: Flat dict with 25 columns (match_id, queue_id, game_version, game_duration, team1_win, 10 bans, 10 picks).
         """
+
+        # Defensive helper to avoid index errors when upstream data is incomplete (e.g., live games)
+        def _safe_pick(picks: list[Any], idx: int) -> Any:
+            return picks[idx] if isinstance(picks, list) and len(picks) > idx else None
+
         match_record = {
             "match_id": match_id,
             "queue_id": match_pre_features.get("queue_id"),
@@ -990,16 +1039,16 @@ class MatchFetcher:
                 match_pre_features.get("team2_bans")[4] if len(match_pre_features.get("team2_bans")) > 4 else None
             ),
             # picks
-            "team1_pick_top": match_pre_features.get("team1_picks")[0],
-            "team1_pick_jungle": match_pre_features.get("team1_picks")[1],
-            "team1_pick_mid": match_pre_features.get("team1_picks")[2],
-            "team1_pick_adc": match_pre_features.get("team1_picks")[3],
-            "team1_pick_support": match_pre_features.get("team1_picks")[4],
-            "team2_pick_top": match_pre_features.get("team2_picks")[0],
-            "team2_pick_jungle": match_pre_features.get("team2_picks")[1],
-            "team2_pick_mid": match_pre_features.get("team2_picks")[2],
-            "team2_pick_adc": match_pre_features.get("team2_picks")[3],
-            "team2_pick_support": match_pre_features.get("team2_picks")[4],
+            "team1_pick_top": _safe_pick(match_pre_features.get("team1_picks"), 0),
+            "team1_pick_jungle": _safe_pick(match_pre_features.get("team1_picks"), 1),
+            "team1_pick_mid": _safe_pick(match_pre_features.get("team1_picks"), 2),
+            "team1_pick_adc": _safe_pick(match_pre_features.get("team1_picks"), 3),
+            "team1_pick_support": _safe_pick(match_pre_features.get("team1_picks"), 4),
+            "team2_pick_top": _safe_pick(match_pre_features.get("team2_picks"), 0),
+            "team2_pick_jungle": _safe_pick(match_pre_features.get("team2_picks"), 1),
+            "team2_pick_mid": _safe_pick(match_pre_features.get("team2_picks"), 2),
+            "team2_pick_adc": _safe_pick(match_pre_features.get("team2_picks"), 3),
+            "team2_pick_support": _safe_pick(match_pre_features.get("team2_picks"), 4),
         }
         return match_record
 

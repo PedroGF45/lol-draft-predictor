@@ -128,7 +128,10 @@ class Requester:
         # Handle common status codes with project-relevant messages
         if response.status_code == 200:
             return self._safe_json(response)
-        elif response.status_code == 403:
+
+        # Log and return None for non-successful responses so callers do not
+        # accidentally treat an error payload (e.g., 403/404 JSON) as valid data.
+        if response.status_code == 403:
             self.logger.warning("Error 403: Forbidden. API key might be invalid or expired.")
         elif response.status_code == 404:
             self.logger.warning("Error 404: Not Found. The requested resource may not exist in this region.")
@@ -144,8 +147,7 @@ class Requester:
             self.logger.error("Request failed with status code: %s", response.status_code)
             self.logger.debug("Response content (first 500 chars): %s", response.text[:500])
 
-        # Attempt to return any JSON error body for callers to inspect; may be None
-        return self._safe_json(response)
+        return None
 
     def _safe_json(self, response: requests.Response) -> Optional[Any]:
         """
