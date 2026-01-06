@@ -772,46 +772,65 @@ async def check_live_game(req: LiveGameRequest):
                 error="Region manager not initialized. Set RIOT_API_KEY.",
             )
 
-        # Get all regions in the same cluster to try (player might be on different platform)
-        regions_to_try = region_manager.get_cluster_regions(req.region)
-        monitoring.info(f"Will try platforms in order: {regions_to_try}")
+        # Get PUUID from the requested region
+        requested_requester = region_manager.get_requester(req.region)
 
+        if not requested_requester:
+            return LiveGameResponse(
+                has_active_game=False,
+                error=f"Unsupported region: {req.region}. Supported: {', '.join(REGION_CLUSTER_MAP.keys())}",
+            )
+
+        account = requested_requester.make_request(
+            is_v5=True, endpoint_url=f"/riot/account/v1/accounts/by-riot-id/{req.game_name}/{req.tag_line}"
+        )
+
+        if not account or not account.get("puuid"):
+            return LiveGameResponse(
+                has_active_game=False,
+                error=f"Player not found.",
+            )
+
+        puuid = account["puuid"]
+        monitoring.info(f"Found PUUID: {puuid} for {req.game_name}#{req.tag_line}")
+
+        # Try v5 spectator endpoint on the requested region first, then fallback to other regions
         match_pre_features = None
-        successful_region = None
+        all_regions = [region for regions in CLUSTER_REGIONS_MAP.values() for region in regions]
+        regions_to_try = [req.region] + [r for r in all_regions if r != req.region]
 
-        # Try each platform in the cluster until we find the player
+        from helpers.parquet_handler import ParquetHandler
+
         for try_region in regions_to_try:
             region_requester = region_manager.get_requester(try_region)
             if not region_requester:
                 continue
 
-            # Create a temporary MatchFetcher with the region-specific requester
-            from helpers.parquet_handler import ParquetHandler
-
-            temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
-            temp_match_fetcher = MatchFetcher(
-                requester=region_requester,
-                logger=monitoring.logger,
-                parquet_handler=temp_parquet_handler,
-                dataframe_target_path=os.path.join(REPO_ROOT, "data"),
+            active_game = region_requester.make_request(
+                is_v5=True, endpoint_url=f"/lol/spectator-v5/active-games/by-puuid/{puuid}"
             )
 
-            # Try to fetch live game
-            monitoring.info(f"Trying platform: {try_region}")
-            match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
-                req.game_name, req.tag_line, data_miner=None
-            )
+            if active_game:
+                monitoring.info(f"Found active game on region: {try_region}")
 
-            if match_pre_features:
-                successful_region = try_region
-                monitoring.info(f"Found player on platform: {try_region}")
-                break
+                temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
+                temp_match_fetcher = MatchFetcher(
+                    requester=region_requester,
+                    logger=monitoring.logger,
+                    parquet_handler=temp_parquet_handler,
+                    dataframe_target_path=os.path.join(REPO_ROOT, "data"),
+                )
+
+                match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
+                    req.game_name, req.tag_line, data_miner=None
+                )
+                if match_pre_features:
+                    break
 
         if not match_pre_features:
-            cluster = REGION_CLUSTER_MAP.get(req.region.lower(), "unknown")
             return LiveGameResponse(
                 has_active_game=False,
-                error=f"No active game found in {cluster} cluster (tried: {', '.join(regions_to_try)}).",
+                error="No active game found for this player.",
             )
 
         # Process similar to completed match
