@@ -821,40 +821,37 @@ async def check_live_game(req: LiveGameRequest):
         puuid = account["puuid"]
         monitoring.info(f"Found PUUID: {puuid} for {req.game_name}#{req.tag_line}")
 
-        # Try v5 spectator endpoint on the requested region first, then fallback to other regions
+        # Check for active game on the requested region only
         match_pre_features = None
-        all_regions = [region for regions in CLUSTER_REGIONS_MAP.values() for region in regions]
-        regions_to_try = [req.region] + [r for r in all_regions if r != req.region]
+        region_requester = region_manager.get_requester(req.region)
+
+        if not region_requester:
+            return LiveGameResponse(
+                has_active_game=False,
+                error=f"Failed to get requester for region: {req.region}",
+            )
 
         from helpers.parquet_handler import ParquetHandler
 
-        for try_region in regions_to_try:
-            # Get platform-specific requester for spectator endpoint
-            region_requester = region_manager.get_requester(try_region)
-            if not region_requester:
-                continue
+        active_game = region_requester.make_request(
+            is_v5=True, endpoint_url=f"/lol/spectator/v5/active-games/by-summoner/{puuid}"
+        )
 
-            active_game = region_requester.make_request(
-                is_v5=True, endpoint_url=f"/lol/spectator/v5/active-games/by-summoner/{puuid}"
+        # Only proceed if we got a valid game response with required fields
+        if active_game and isinstance(active_game, dict) and "gameId" in active_game:
+            monitoring.info(f"Found active game on region: {req.region} with gameId: {active_game['gameId']}")
+
+            temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
+            temp_match_fetcher = MatchFetcher(
+                requester=region_requester,
+                logger=monitoring.logger,
+                parquet_handler=temp_parquet_handler,
+                dataframe_target_path=os.path.join(REPO_ROOT, "data"),
             )
 
-            # Only proceed if we got a valid game response with required fields
-            if active_game and isinstance(active_game, dict) and "gameId" in active_game:
-                monitoring.info(f"Found active game on region: {try_region} with gameId: {active_game['gameId']}")
-
-                temp_parquet_handler = ParquetHandler(logger=monitoring.logger)
-                temp_match_fetcher = MatchFetcher(
-                    requester=region_requester,
-                    logger=monitoring.logger,
-                    parquet_handler=temp_parquet_handler,
-                    dataframe_target_path=os.path.join(REPO_ROOT, "data"),
-                )
-
-                match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
-                    req.game_name, req.tag_line, data_miner=None
-                )
-                if match_pre_features:
-                    break
+            match_pre_features = temp_match_fetcher.fetch_active_game_pre_features(
+                req.game_name, req.tag_line, data_miner=None
+            )
 
         if not match_pre_features:
             return LiveGameResponse(
