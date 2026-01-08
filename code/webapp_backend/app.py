@@ -514,6 +514,19 @@ async def health():
     return {"status": "ok", "model_loaded": model_loader.is_loaded}
 
 
+@app.get("/riot.txt")
+async def riot_verification():
+    """Riot API verification endpoint."""
+    riot_file_path = os.path.join(os.path.dirname(__file__), "riot.txt")
+    try:
+        with open(riot_file_path, "r") as f:
+            content = f.read().strip()
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(content=content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Verification file not found")
+
+
 @app.get("/")
 async def root():
     """Redirect to static frontend when model is ready; otherwise show error page."""
