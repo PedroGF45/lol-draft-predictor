@@ -36,18 +36,35 @@ def load_checkpoint(logger: logging.Logger, path: str) -> Optional[dict[str, Any
     """
     Load a checkpoint if it exists; return None if missing or invalid.
     """
-    if not path or path.endswith(os.sep):
-        logger.warning("'path' should be a file path; received a directory-like path")
-        return None
-
-    if not os.path.exists(path):
-        logger.info("Checkpoint file not found; starting fresh")
-        return None
-
+    # If caller passed a directory, attempt to load the latest .pkl checkpoint inside
     try:
-        with open(path, "rb") as f:
+        if not path:
+            logger.info("No checkpoint path provided; starting fresh")
+            return None
+
+        if os.path.isdir(path):
+            logger.info(f"Checkpoint path is a directory; searching for latest checkpoint in {path}")
+            candidates = [
+                os.path.join(path, f)
+                for f in os.listdir(path)
+                if f.lower().endswith(".pkl") and os.path.isfile(os.path.join(path, f))
+            ]
+            if not candidates:
+                logger.info("No checkpoint files found in directory; starting fresh")
+                return None
+            # pick most recently modified file
+            latest = max(candidates, key=os.path.getmtime)
+            path_to_load = latest
+        else:
+            path_to_load = path
+
+        if not os.path.exists(path_to_load):
+            logger.info("Checkpoint file not found; starting fresh")
+            return None
+
+        with open(path_to_load, "rb") as f:
             state = pickle.load(f)
-            logger.info(f"Checkpoint loaded from {path}")
+            logger.info(f"Checkpoint loaded from {path_to_load}")
             return state
     except Exception as e:
         logger.warning(f"Loading checkpoint failed: {e}")

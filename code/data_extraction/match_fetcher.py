@@ -452,7 +452,10 @@ class MatchFetcher:
         os.makedirs(checkpoint_dir, exist_ok=True)
 
         timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
-        checkpoint_filename = f"{timestamp}_{len(self.processed_matches)}_matches_checkpoint.pkl"
+        # Use both the number of processed match IDs and the number of match records
+        processed_count = len(self.processed_matches)
+        match_records_count = len(self.final_match_df_list)
+        checkpoint_filename = f"{timestamp}_{match_records_count}matches_{processed_count}processed_checkpoint.pkl"
         checkpoint_path = os.path.join(checkpoint_dir, checkpoint_filename)
 
         checkpoint_state = {
@@ -462,8 +465,11 @@ class MatchFetcher:
         }
         save_checkpoint(logger=self.logger, state=checkpoint_state, path=checkpoint_path)
 
-        # Keep latest path for cleanup
+        # Keep latest path for cleanup and log clear counts
         self.checkpoint_loading_path = checkpoint_path
+        self.logger.info(
+            f"Checkpoint created: {checkpoint_path} (match_records={match_records_count}, processed_ids={processed_count})"
+        )
 
     def fetch_active_game_pre_features(self, active_game: dict[str, Any]) -> Optional[dict[str, Any]]:
         """
