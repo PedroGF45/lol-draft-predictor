@@ -219,23 +219,44 @@ class MatchFetcher:
         match_df = self.parquet_handler.read_parquet(file_path=parquet_path, load_percentage=self.load_percentage)
 
         # Filter through master registry if available
+        # Skip registry filter for matches with game_version="pending" (from DataMiner)
+        # Those need to be processed by MatchFetcher to get the actual game_version
         if self.master_registry:
             initial_count = len(match_df)
-            # Filter out matches already in registry
+            # Only filter matches that have a real game_version (not "pending")
             if "game_version" in match_df.columns:
-                match_df["_composite_key"] = list(
-                    zip(match_df["match_id"].astype(str), match_df["game_version"].astype(str))
-                )
-                match_df = match_df[~match_df["_composite_key"].isin(self.master_registry.match_registry.keys())]
-                match_df = match_df.drop(columns=["_composite_key"])
+                # Filter to only process matches with pending game_version OR matches not yet in registry
+                pending_mask = match_df["game_version"] == "pending"
+                pending_matches = match_df[pending_mask]
+                
+                # For non-pending matches, check if already registered
+                non_pending_matches = match_df[~pending_mask]
+                if len(non_pending_matches) > 0:
+                    non_pending_matches["_composite_key"] = list(
+                        zip(non_pending_matches["match_id"].astype(str), non_pending_matches["game_version"].astype(str))
+                    )
+                    non_pending_matches = non_pending_matches[~non_pending_matches["_composite_key"].isin(self.master_registry.match_registry.keys())]
+                    non_pending_matches = non_pending_matches.drop(columns=["_composite_key"])
+                
+                # Combine pending + unregistered non-pending matches
+                match_df = pd.concat([pending_matches, non_pending_matches], ignore_index=True)
             else:
-                # If no game_version yet, just filter by match_id (less precise but still helpful)
+                # If no game_version yet, just filter by match_id
                 registered_match_ids = {k[0] for k in self.master_registry.match_registry.keys()}
                 match_df = match_df[~match_df["match_id"].isin(registered_match_ids)]
 
             filtered_count = initial_count - len(match_df)
             self.logger.info(
                 f"Registry filter: {len(match_df)} new matches to process, {filtered_count} already in registry"
+            )
+
+        # Pre-filter by allowed queues to avoid noisy per-match skips
+        if "queue_id" in match_df.columns and queue:
+            before_queue_filter = len(match_df)
+            match_df = match_df[match_df["queue_id"].isin(queue)]
+            after_queue_filter = len(match_df)
+            self.logger.info(
+                f"Queue filter: {after_queue_filter} matches kept, {before_queue_filter - after_queue_filter} dropped"
             )
 
         # Add progress bar for match processing
@@ -370,10 +391,16 @@ class MatchFetcher:
         final_player_history_df = pd.DataFrame(self.final_player_history_df_list)
 
         self.logger.info(f"Final Dataframe Head: {final_match_df.head()}")
-        self.logger.info(f"Final Dataframde description: {final_match_df.describe()}")
+        if len(final_match_df) > 0:
+            self.logger.info(f"Final Dataframe description: {final_match_df.describe()}")
+        else:
+            self.logger.warning("Final dataframe is empty - no matches were successfully processed")
 
         self.logger.info(f"Final Player History Dataframe Head: {final_player_history_df.head()}")
-        self.logger.info(f"Final Player History Dataframde description: {final_player_history_df.describe()}")
+        if len(final_player_history_df) > 0:
+            self.logger.info(f"Final Player History Dataframe description: {final_player_history_df.describe()}")
+        else:
+            self.logger.warning("Final player history dataframe is empty - no player records were processed")
 
         # Register matches with master registry if available
         if self.master_registry and len(final_match_df) > 0:

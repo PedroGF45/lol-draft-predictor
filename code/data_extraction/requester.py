@@ -38,6 +38,7 @@ class Requester:
         timeout: float = 10.0,
         max_retries: int = 3,
         backoff_factor: float = 0.3,
+        pool_maxsize: int = 50,
     ) -> None:
         """
         Initialize a session-enabled client with retry/backoff and timeouts.
@@ -81,7 +82,8 @@ class Requester:
             raise_on_status=False,
             respect_retry_after_header=True,
         )
-        adapter = HTTPAdapter(max_retries=retry)
+        # Increase connection pool to reduce 'Connection pool is full' warnings
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=pool_maxsize, pool_maxsize=pool_maxsize)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
