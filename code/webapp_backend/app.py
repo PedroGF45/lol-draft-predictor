@@ -522,6 +522,7 @@ async def riot_verification():
         with open(riot_file_path, "r") as f:
             content = f.read().strip()
         from fastapi.responses import PlainTextResponse
+
         return PlainTextResponse(content=content)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Verification file not found")
